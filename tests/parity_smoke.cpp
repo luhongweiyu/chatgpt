@@ -1743,6 +1743,30 @@ void test_critical_and_password(
     eq_num("LeaveCri-B-after-reset", old2.LeaveCri(), new2.LeaveCri());
 }
 
+
+void test_system_paths_and_commandline(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    for (long type = 0; type <= 4; ++type) {
+        const char *a = old_dm.GetDir(type);
+        const char *b = new_dm.GetDir(type);
+        eq_str(("GetDir-" + std::to_string(type)).c_str(),
+               a ? std::string(a) : "<null>",
+               b ? std::string(b) : "<null>");
+    }
+
+    eq_num("IsSurrpotVt", old_dm.IsSurrpotVt(), new_dm.IsSurrpotVt());
+
+    const long pid = static_cast<long>(::GetCurrentProcessId());
+    old_dm.SetMemoryHwndAsProcessId(1);
+    new_dm.SetMemoryHwndAsProcessId(1);
+    {
+        const char *a = old_dm.GetCommandLine(pid);
+        const char *b = new_dm.GetCommandLine(pid);
+        eq_str("GetCommandLine-pid",
+               a ? std::string(a) : "<null>",
+               b ? std::string(b) : "<null>");
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1765,6 +1789,7 @@ int main(int argc, char **argv) {
         test_pure(old_dm, new_dm);
         test_pure_extended(old_dm, new_dm);
         test_basic_settings(old_dm, new_dm);
+        test_system_paths_and_commandline(old_dm, new_dm);
         test_position_algorithms(old_dm, new_dm);
         test_picture_cache_and_find(old_dm, new_dm);
         test_encoded_capture(old_dm, new_dm);
