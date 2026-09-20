@@ -149,6 +149,10 @@ public:
     const char *ReadData(long hwnd,PCSTR addr,long len) { using F=PCSTR(WINAPI*)(long,long,PCSTR,long); return at<F>(119744)(obj_,hwnd,addr,len); }
     long WriteData(long hwnd,PCSTR addr,PCSTR data) { using F=long(WINAPI*)(long,long,PCSTR,PCSTR); return at<F>(120080)(obj_,hwnd,addr,data); }
 
+    const char *ExcludePos(PCSTR all_pos,long type,long x1,long y1,long x2,long y2) { using F=PCSTR(WINAPI*)(long,PCSTR,long,long,long,long,long); return at<F>(112432)(obj_,all_pos,type,x1,y1,x2,y2); }
+    const char *FindNearestPos(PCSTR all_pos,long type,long x,long y) { using F=PCSTR(WINAPI*)(long,PCSTR,long,long,long); return at<F>(115152)(obj_,all_pos,type,x,y); }
+    const char *SortPosDistance(PCSTR all_pos,long type,long x,long y) { using F=PCSTR(WINAPI*)(long,PCSTR,long,long,long); return at<F>(117776)(obj_,all_pos,type,x,y); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
