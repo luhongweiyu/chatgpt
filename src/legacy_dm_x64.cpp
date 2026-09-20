@@ -38,6 +38,7 @@
 #include <limits>
 #include <random>
 #include <sstream>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,13 @@ struct DmImpl {
     std::map<long, std::string> play_aliases;
     bool pic_cache_enabled = true;
     std::map<std::string, std::shared_ptr<ScreenImageCompat>> pic_cache;
+    bool display_debug_enabled = false;
+    long display_delay = 3000;
+    long display_refresh_delay = 400;
+    bool show_asm_error_msg = true;
+    bool find_pic_multithread_enabled = true;
+    long find_pic_multithread_count = 4;
+    long find_pic_multithread_limit = 0;
 };
 
 
@@ -1305,6 +1313,8 @@ struct ScreenImageCompat {
     }
 };
 
+thread_local std::shared_ptr<ScreenImageCompat> g_last_graphic_capture;
+
 bool CaptureScreenRegionCompat(long x1, long y1, long x2, long y2, ScreenImageCompat &out) {
     out = {};
     if (x2 < x1 || y2 < y1) return false;
@@ -1366,6 +1376,8 @@ bool CaptureScreenRegionCompat(long x1, long y1, long x2, long y2, ScreenImageCo
             out.pixels[i].g = src[i * 4 + 1];
             out.pixels[i].r = src[i * 4 + 2];
         }
+        g_last_graphic_capture =
+            std::make_shared<ScreenImageCompat>(out);
     }
 
     ::DeleteObject(bitmap);
@@ -5368,6 +5380,75 @@ long dmsoft::ImageToBmp(PCSTR pic_name, PCSTR bmp_name) {
     const auto dest = ResolveObjectFilePathCompat(p, bmp_name);
     if (source.empty() || dest.empty()) return 0;
     return ConvertImageToBmp24Compat(source, dest) ? 1 : 0;
+}
+
+
+long dmsoft::EnableDisplayDebug(long enable_debug) {
+    auto *p = P(impl);
+    if (!p || (enable_debug != 0 && enable_debug != 1)) return 0;
+    p->display_debug_enabled = enable_debug != 0;
+    return 1;
+}
+
+
+long dmsoft::CapturePre(PCSTR file) {
+    auto *p = P(impl);
+    if (!p || !p->display_debug_enabled || !file || !*file ||
+        !g_last_graphic_capture)
+        return 0;
+    const auto path = ResolveObjectFilePathCompat(p, file);
+    if (path.empty()) return 0;
+    return WriteBmp24Compat(path, *g_last_graphic_capture) ? 1 : 0;
+}
+
+
+long dmsoft::SetDisplayDelay(long t) {
+    auto *p = P(impl);
+    if (!p || t < 0) return 0;
+    p->display_delay = t;
+    return 1;
+}
+
+
+long dmsoft::SetDisplayRefreshDelay(long t) {
+    auto *p = P(impl);
+    if (!p || t < 0) return 0;
+    p->display_refresh_delay = t;
+    return 1;
+}
+
+
+long dmsoft::SetShowAsmErrorMsg(long show) {
+    auto *p = P(impl);
+    if (!p || (show != 0 && show != 1)) return 0;
+    p->show_asm_error_msg = show != 0;
+    return 1;
+}
+
+
+long dmsoft::EnableFindPicMultithread(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    p->find_pic_multithread_enabled = en != 0;
+    return 1;
+}
+
+
+long dmsoft::SetFindPicMultithreadCount(long count) {
+    auto *p = P(impl);
+    if (!p || count <= 0) return 0;
+    p->find_pic_multithread_count = count;
+    return 1;
+}
+
+
+long dmsoft::SetFindPicMultithreadLimit(long limit) {
+    auto *p = P(impl);
+    if (!p || limit <= 0) return 0;
+    const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
+    if (static_cast<unsigned long>(limit) > cores) return 0;
+    p->find_pic_multithread_limit = limit;
+    return 1;
 }
 
 #include "legacy_dm_generated.inc"
