@@ -317,8 +317,10 @@ std::vector<HWND> EnumWindowsCompat(
     if (parent) {
         if (filter & 4) EnumDirectChildrenCompat(parent, ctx);
         else ::EnumChildWindows(parent, EnumWindowCompatProc, reinterpret_cast<LPARAM>(&ctx));
-    } else {
+    } else if (filter & 8) {
         ::EnumWindows(EnumWindowCompatProc, reinterpret_cast<LPARAM>(&ctx));
+    } else {
+        ::EnumChildWindows(::GetDesktopWindow(), EnumWindowCompatProc, reinterpret_cast<LPARAM>(&ctx));
     }
 
     if (filter & 32) {
@@ -1239,14 +1241,14 @@ const char *dmsoft::EnumWindow(long parent, PCSTR title, PCSTR class_name, long 
 }
 
 long dmsoft::FindWindowByProcessId(long process_id, PCSTR class_name, PCSTR title_name) {
-    auto windows = EnumWindowsCompat(nullptr, static_cast<DWORD>(process_id), title_name, class_name, 1 | 2);
+    auto windows = EnumWindowsCompat(nullptr, static_cast<DWORD>(process_id), title_name, class_name, 1 | 2 | 8 | 16);
     return windows.empty() ? 0 : static_cast<long>(reinterpret_cast<INT_PTR>(windows.front()));
 }
 
 long dmsoft::FindWindowByProcess(PCSTR process_name, PCSTR class_name, PCSTR title_name) {
     const auto pids = EnumProcessIdsCompat(process_name);
     for (DWORD pid : pids) {
-        auto windows = EnumWindowsCompat(nullptr, pid, title_name, class_name, 1 | 2);
+        auto windows = EnumWindowsCompat(nullptr, pid, title_name, class_name, 1 | 2 | 8 | 16);
         if (!windows.empty())
             return static_cast<long>(reinterpret_cast<INT_PTR>(windows.front()));
     }
@@ -1266,8 +1268,10 @@ const char *dmsoft::EnumWindowByProcess(PCSTR process_name, PCSTR title, PCSTR c
     if (!p) return "";
 
     std::vector<HWND> all;
-    for (DWORD pid : EnumProcessIdsCompat(process_name)) {
-        auto part = EnumWindowsCompat(nullptr, pid, title, class_name, filter);
+    const auto pids = EnumProcessIdsCompat(process_name);
+    const size_t count = (filter & 4) && !pids.empty() ? 1 : pids.size();
+    for (size_t i = 0; i < count; ++i) {
+        auto part = EnumWindowsCompat(nullptr, pids[i], title, class_name, filter & ~4L);
         all.insert(all.end(), part.begin(), part.end());
     }
     p->scratch = JoinHwndsCompat(all);
