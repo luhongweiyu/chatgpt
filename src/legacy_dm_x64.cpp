@@ -2711,25 +2711,6 @@ std::string QueryProcessCommandLineCompat(DWORD pid) {
         us->Buffer, static_cast<int>(us->Length / sizeof(wchar_t)));
 }
 
-bool IntelVtEnabledCompat() {
-    int regs[4]{};
-    __cpuid(regs, 0);
-    char vendor[13]{};
-    std::memcpy(vendor + 0, &regs[1], 4); // EBX
-    std::memcpy(vendor + 4, &regs[3], 4); // EDX
-    std::memcpy(vendor + 8, &regs[2], 4); // ECX
-    if (std::strcmp(vendor, "GenuineIntel") != 0) return false;
-
-    __cpuid(regs, 1);
-    constexpr int kVmxBit = 1 << 5; // CPUID.1:ECX.VMX
-    if ((regs[2] & kVmxBit) == 0) return false;
-
-#ifndef PF_VIRT_FIRMWARE_ENABLED
-#define PF_VIRT_FIRMWARE_ENABLED 21
-#endif
-    return ::IsProcessorFeaturePresent(PF_VIRT_FIRMWARE_ENABLED) != FALSE;
-}
-
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -2757,7 +2738,7 @@ dmsoft::~dmsoft() {
         impl = nullptr;
     }
 }
-bool dmsoft::IsValid() const { return impl != nullptr && P(impl)->op.IsValid(); }
+bool dmsoft::IsValid() const { return impl != nullptr; }
 
 long dmsoft::ReleaseRef() { return 1; }
 long dmsoft::Is64Bit() { return 1; }
