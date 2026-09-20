@@ -15,6 +15,8 @@
 #include <shobjidl.h>
 #include <shlobj.h>
 #include <winioctl.h>
+#include <mmsystem.h>
+#include <dwmapi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -62,6 +64,8 @@ struct DmImpl {
     long mouse_delay_windows = 10;
     long mouse_delay_dx = 40;
     bool get_color_by_capture = true;
+    long next_play_id = 1;
+    std::map<long, std::string> play_aliases;
 };
 
 
@@ -2079,8 +2083,16 @@ dmsoft::dmsoft() : impl(new DmImpl()) {
 }
 dmsoft::~dmsoft() {
     if (impl) {
+        auto *p = P(impl);
+        for (const auto &entry : p->play_aliases) {
+            const std::string stop = "stop " + entry.second;
+            const std::string close = "close " + entry.second;
+            ::mciSendStringA(stop.c_str(), nullptr, 0, nullptr);
+            ::mciSendStringA(close.c_str(), nullptr, 0, nullptr);
+        }
+        p->play_aliases.clear();
         g_dm_object_count.fetch_sub(1, std::memory_order_relaxed);
-        delete P(impl);
+        delete p;
         impl = nullptr;
     }
 }
@@ -4413,6 +4425,75 @@ const char *dmsoft::ExecuteCmd(PCSTR cmd, PCSTR current_dir, long time_out) {
 
 long dmsoft::DownloadFile(PCSTR url, PCSTR save_file, long timeout) {
     return DownloadFileCompat(url, save_file, timeout);
+}
+
+
+long dmsoft::Play(PCSTR file) {
+    auto *p = P(impl);
+    if (!p || !file || !*file) return 0;
+
+    const std::string path = ResolveObjectPathCompat(p, file);
+    if (path.empty() || !std::filesystem::is_regular_file(path)) return 0;
+
+    long id = 0;
+    std::string alias;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        for (;;) {
+            id = p->next_play_id++;
+            if (p->next_play_id <= 0) p->next_play_id = 1;
+            if (id > 0 && p->play_aliases.find(id) == p->play_aliases.end())
+                break;
+        }
+        alias = "hcbyj_" + std::to_string(p->id) + "_" + std::to_string(id);
+    }
+
+    const std::string open =
+        "open \"" + path + "\" alias " + alias;
+    if (::mciSendStringA(open.c_str(), nullptr, 0, nullptr) != 0)
+        return 0;
+
+    const std::string play = "play " + alias;
+    if (::mciSendStringA(play.c_str(), nullptr, 0, nullptr) != 0) {
+        const std::string close = "close " + alias;
+        ::mciSendStringA(close.c_str(), nullptr, 0, nullptr);
+        return 0;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        p->play_aliases[id] = alias;
+    }
+    return id;
+}
+
+long dmsoft::Stop(long id) {
+    auto *p = P(impl);
+    if (!p || id <= 0) return 0;
+
+    std::string alias;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        const auto it = p->play_aliases.find(id);
+        if (it == p->play_aliases.end()) return 0;
+        alias = it->second;
+        p->play_aliases.erase(it);
+    }
+
+    const std::string stop = "stop " + alias;
+    const MCIERROR stop_error =
+        ::mciSendStringA(stop.c_str(), nullptr, 0, nullptr);
+    const std::string close = "close " + alias;
+    const MCIERROR close_error =
+        ::mciSendStringA(close.c_str(), nullptr, 0, nullptr);
+    return stop_error == 0 && close_error == 0 ? 1 : 0;
+}
+
+long dmsoft::SetAero(long enable) {
+    if (enable != 0 && enable != 1) return 0;
+    const HRESULT hr = ::DwmEnableComposition(
+        enable ? DWM_EC_ENABLECOMPOSITION : DWM_EC_DISABLECOMPOSITION);
+    return SUCCEEDED(hr) ? 1 : 0;
 }
 
 #include "legacy_dm_generated.inc"
