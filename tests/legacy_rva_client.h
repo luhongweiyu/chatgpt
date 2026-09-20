@@ -136,6 +136,19 @@ public:
     long SetEnumWindowDelay(long delay) { using F=long(WINAPI*)(long,long); return at<F>(109088)(obj_,delay); }
     long SetShowErrorMsg(long show) { using F=long(WINAPI*)(long,long); return at<F>(118560)(obj_,show); }
 
+    LONGLONG ReadInt(long hwnd,PCSTR addr,long type) { using F=LONGLONG(WINAPI*)(long,long,PCSTR,long); return at<F>(123856)(obj_,hwnd,addr,type); }
+    long WriteInt(long hwnd,PCSTR addr,long type,LONGLONG v) { using F=long(WINAPI*)(long,long,PCSTR,long,LONGLONG); return at<F>(122064)(obj_,hwnd,addr,type,v); }
+    float ReadFloat(long hwnd,PCSTR addr) { using F=float(WINAPI*)(long,long,PCSTR); return at<F>(118864)(obj_,hwnd,addr); }
+    long WriteFloat(long hwnd,PCSTR addr,float v) { using F=long(WINAPI*)(long,long,PCSTR,float); return at<F>(119440)(obj_,hwnd,addr,v); }
+    double ReadDouble(long hwnd,PCSTR addr) { using F=double(WINAPI*)(long,long,PCSTR); return at<F>(115088)(obj_,hwnd,addr); }
+    long WriteDouble(long hwnd,PCSTR addr,double v) { using F=long(WINAPI*)(long,long,PCSTR,double); return at<F>(106512)(obj_,hwnd,addr,v); }
+    const char *ReadString(long hwnd,PCSTR addr,long type,long len) { using F=PCSTR(WINAPI*)(long,long,PCSTR,long,long); return at<F>(120960)(obj_,hwnd,addr,type,len); }
+    long WriteString(long hwnd,PCSTR addr,long type,PCSTR v) { using F=long(WINAPI*)(long,long,PCSTR,long,PCSTR); return at<F>(109936)(obj_,hwnd,addr,type,v); }
+    const char *ReadStringAddr(long hwnd,LONGLONG addr,long type,long len) { using F=PCSTR(WINAPI*)(long,long,LONGLONG,long,long); return at<F>(119312)(obj_,hwnd,addr,type,len); }
+    long WriteStringAddr(long hwnd,LONGLONG addr,long type,PCSTR v) { using F=long(WINAPI*)(long,long,LONGLONG,long,PCSTR); return at<F>(107808)(obj_,hwnd,addr,type,v); }
+    const char *ReadData(long hwnd,PCSTR addr,long len) { using F=PCSTR(WINAPI*)(long,long,PCSTR,long); return at<F>(119744)(obj_,hwnd,addr,len); }
+    long WriteData(long hwnd,PCSTR addr,PCSTR data) { using F=long(WINAPI*)(long,long,PCSTR,PCSTR); return at<F>(120080)(obj_,hwnd,addr,data); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
