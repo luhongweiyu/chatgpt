@@ -305,6 +305,13 @@ public:
     long SetRowGapNoDict(long v) { using F=long(WINAPI*)(long,long); return at<F>(118464)(obj_,v); }
     long SetColGapNoDict(long v) { using F=long(WINAPI*)(long,long); return at<F>(106640)(obj_,v); }
 
+    long InitCri() { using F=long(WINAPI*)(long); return at<F>(116384)(obj_); }
+    long EnterCri() { using F=long(WINAPI*)(long); return at<F>(101504)(obj_); }
+    long LeaveCri() { using F=long(WINAPI*)(long); return at<F>(108512)(obj_); }
+    long SetPicPwd(PCSTR pwd) { using F=long(WINAPI*)(long,PCSTR); return at<F>(111312)(obj_,pwd); }
+    long SetDictPwd(PCSTR pwd) { using F=long(WINAPI*)(long,PCSTR); return at<F>(105984)(obj_,pwd); }
+    long SetParam64ToPointer() { using F=long(WINAPI*)(long); return at<F>(111200)(obj_); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
