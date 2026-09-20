@@ -64,6 +64,33 @@ public:
     const char *GetEnv(long index,PCSTR name) { using F=PCSTR(WINAPI*)(long,long,PCSTR); return at<F>(125376)(obj_,index,name); }
     long DelEnv(long index,PCSTR name) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(126992)(obj_,index,name); }
 
+    long SetMemoryHwndAsProcessId(long en) { using F=long(WINAPI*)(long,long); return at<F>(123088)(obj_,en); }
+    LONGLONG ReadIntAddr(long hwnd,LONGLONG addr,long type) { using F=LONGLONG(WINAPI*)(long,long,LONGLONG,long); return at<F>(103696)(obj_,hwnd,addr,type); }
+    long WriteIntAddr(long hwnd,LONGLONG addr,long type,LONGLONG v) { using F=long(WINAPI*)(long,long,LONGLONG,long,LONGLONG); return at<F>(109184)(obj_,hwnd,addr,type,v); }
+    float ReadFloatAddr(long hwnd,LONGLONG addr) { using F=float(WINAPI*)(long,long,LONGLONG); return at<F>(117648)(obj_,hwnd,addr); }
+    long WriteFloatAddr(long hwnd,LONGLONG addr,float v) { using F=long(WINAPI*)(long,long,LONGLONG,float); return at<F>(104864)(obj_,hwnd,addr,v); }
+    double ReadDoubleAddr(long hwnd,LONGLONG addr) { using F=double(WINAPI*)(long,long,LONGLONG); return at<F>(117376)(obj_,hwnd,addr); }
+    long WriteDoubleAddr(long hwnd,LONGLONG addr,double v) { using F=long(WINAPI*)(long,long,LONGLONG,double); return at<F>(123328)(obj_,hwnd,addr,v); }
+    const char *ReadDataAddr(long hwnd,LONGLONG addr,long len) { using F=PCSTR(WINAPI*)(long,long,LONGLONG,long); return at<F>(111360)(obj_,hwnd,addr,len); }
+    long WriteDataAddr(long hwnd,LONGLONG addr,PCSTR data) { using F=long(WINAPI*)(long,long,LONGLONG,PCSTR); return at<F>(121184)(obj_,hwnd,addr,data); }
+    LONGLONG GetModuleBaseAddr(long hwnd,PCSTR name) { using F=LONGLONG(WINAPI*)(long,long,PCSTR); return at<F>(114560)(obj_,hwnd,name); }
+    long GetModuleSize(long hwnd,PCSTR name) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(110688)(obj_,hwnd,name); }
+
+    long GetWindowProcessId(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(126240)(obj_,hwnd); }
+    long GetWindowThreadId(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(113568)(obj_,hwnd); }
+    long GetWindowRect(long hwnd,long *x1,long *y1,long *x2,long *y2) { using F=long(WINAPI*)(long,long,long*,long*,long*,long*); return at<F>(102640)(obj_,hwnd,x1,y1,x2,y2); }
+    long GetClientRect(long hwnd,long *x1,long *y1,long *x2,long *y2) { using F=long(WINAPI*)(long,long,long*,long*,long*,long*); return at<F>(118016)(obj_,hwnd,x1,y1,x2,y2); }
+    long GetClientSize(long hwnd,long *w,long *h) { using F=long(WINAPI*)(long,long,long*,long*); return at<F>(113280)(obj_,hwnd,w,h); }
+    long SetWindowSize(long hwnd,long w,long h) { using F=long(WINAPI*)(long,long,long,long); return at<F>(111632)(obj_,hwnd,w,h); }
+    long SetClientSize(long hwnd,long w,long h) { using F=long(WINAPI*)(long,long,long,long); return at<F>(111136)(obj_,hwnd,w,h); }
+    long SetWindowText(long hwnd,PCSTR text) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(123648)(obj_,hwnd,text); }
+    const char *GetWindowTitle(long hwnd) { using F=PCSTR(WINAPI*)(long,long); return at<F>(103584)(obj_,hwnd); }
+    const char *GetWindowClass(long hwnd) { using F=PCSTR(WINAPI*)(long,long); return at<F>(117168)(obj_,hwnd); }
+    long ClientToScreen(long hwnd,long *x,long *y) { using F=long(WINAPI*)(long,long,long*,long*); return at<F>(105664)(obj_,hwnd,x,y); }
+    long ScreenToClient(long hwnd,long *x,long *y) { using F=long(WINAPI*)(long,long,long*,long*); return at<F>(102992)(obj_,hwnd,x,y); }
+    const char *GetWindowProcessPath(long hwnd) { using F=PCSTR(WINAPI*)(long,long); return at<F>(126480)(obj_,hwnd); }
+    const char *GetRealPath(PCSTR path) { using F=PCSTR(WINAPI*)(long,PCSTR); return at<F>(108208)(obj_,path); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
