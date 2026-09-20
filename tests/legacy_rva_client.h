@@ -270,6 +270,10 @@ public:
 #endif
     }
 
+    long Play(PCSTR file) { using F=long(WINAPI*)(long,PCSTR); return at<F>(106464)(obj_,file); }
+    long Stop(long id) { using F=long(WINAPI*)(long,long); return at<F>(123600)(obj_,id); }
+    long SetAero(long enable) { using F=long(WINAPI*)(long,long); return at<F>(103056)(obj_,enable); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
