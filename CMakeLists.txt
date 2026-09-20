@@ -8,6 +8,21 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Build this project with an x64 generator/toolchain.")
 endif()
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+set(HCBYJ64_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(HCBYJ64_GENERATED_WRAPPERS "${HCBYJ64_GENERATED_DIR}/legacy_dm_generated.inc")
+file(MAKE_DIRECTORY "${HCBYJ64_GENERATED_DIR}")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_wrappers.py"
+            "${HCBYJ64_GENERATED_WRAPPERS}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE HCBYJ64_GENERATOR_RESULT
+)
+if(NOT HCBYJ64_GENERATOR_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate legacy compatibility wrappers.")
+endif()
+
 add_library(hcbyj64 SHARED
     src/legacy_dm_x64.cpp
     src/op_dispatch.cpp
@@ -16,6 +31,7 @@ add_library(hcbyj64 SHARED
 target_include_directories(hcbyj64
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${HCBYJ64_GENERATED_DIR}
 )
 
 target_compile_features(hcbyj64 PRIVATE cxx_std_17)
