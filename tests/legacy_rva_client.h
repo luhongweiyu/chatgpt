@@ -217,6 +217,10 @@ public:
     const char *FindShapeEx(long x1,long y1,long x2,long y2,PCSTR offset_color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long); return at<F>(102704)(obj_,x1,y1,x2,y2,offset_color,sim,dir); }
     long FindMulColor(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(102144)(obj_,x1,y1,x2,y2,color,sim); }
 
+    long FindColorBlock(long x1,long y1,long x2,long y2,PCSTR color,double sim,long count,long width,long height,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,double,long,long,long,long*,long*); return at<F>(107136)(obj_,x1,y1,x2,y2,color,sim,count,width,height,x,y); }
+    const char *FindColorBlockEx(long x1,long y1,long x2,long y2,PCSTR color,double sim,long count,long width,long height) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long,long,long); return at<F>(112336)(obj_,x1,y1,x2,y2,color,sim,count,width,height); }
+    long Capture(long x1,long y1,long x2,long y2,PCSTR file) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR); return at<F>(115680)(obj_,x1,y1,x2,y2,file); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
