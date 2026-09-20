@@ -2,6 +2,7 @@
 #include "legacy_dm_x64.h"
 
 #include <windows.h>
+#include <dwmapi.h>
 
 #include <cstdio>
 #include <cstdint>
@@ -47,6 +48,48 @@ std::filesystem::path make_root() {
     std::filesystem::remove_all(root, ec);
     std::filesystem::create_directories(root, ec);
     return root;
+}
+
+
+bool write_silent_wav(const std::filesystem::path &path) {
+    constexpr unsigned sample_rate = 8000;
+    constexpr unsigned data_size = 800; // 100 ms, mono, unsigned 8-bit PCM
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+
+    auto u16 = [&out](unsigned v) {
+        const unsigned char b[2] = {
+            static_cast<unsigned char>(v & 0xff),
+            static_cast<unsigned char>((v >> 8) & 0xff)
+        };
+        out.write(reinterpret_cast<const char *>(b), sizeof(b));
+    };
+    auto u32 = [&out](unsigned v) {
+        const unsigned char b[4] = {
+            static_cast<unsigned char>(v & 0xff),
+            static_cast<unsigned char>((v >> 8) & 0xff),
+            static_cast<unsigned char>((v >> 16) & 0xff),
+            static_cast<unsigned char>((v >> 24) & 0xff)
+        };
+        out.write(reinterpret_cast<const char *>(b), sizeof(b));
+    };
+
+    out.write("RIFF", 4);
+    u32(36 + data_size);
+    out.write("WAVE", 4);
+    out.write("fmt ", 4);
+    u32(16);
+    u16(1);               // PCM
+    u16(1);               // mono
+    u32(sample_rate);
+    u32(sample_rate);     // 1 byte per sample
+    u16(1);
+    u16(8);
+    out.write("data", 4);
+    u32(data_size);
+    std::vector<unsigned char> silence(data_size, 0x80);
+    out.write(reinterpret_cast<const char *>(silence.data()), silence.size());
+    return out.good();
 }
 
 void test_pure(LegacyRvaClient &old_dm, dmsoft &new_dm) {
@@ -1266,6 +1309,44 @@ void test_color_core(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     ::UnregisterClassA(cls, wc.hInstance);
 }
 
+
+void test_audio_aero(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const auto root = make_root();
+    const auto wav = root / "silence.wav";
+    const auto missing = root / "does-not-exist.wav";
+    if (!write_silent_wav(wav)) {
+        fail("write_silent_wav", "success", "failed");
+        return;
+    }
+
+    eq_num("Play-missing",
+           old_dm.Play(missing.string().c_str()),
+           new_dm.Play(missing.string().c_str()));
+
+    const long old_id = old_dm.Play(wav.string().c_str());
+    const long new_id = new_dm.Play(wav.string().c_str());
+    eq_num("Play-success-nonzero", old_id != 0 ? 1 : 0, new_id != 0 ? 1 : 0);
+    eq_num("Play-id", old_id, new_id);
+
+    if (old_id != 0 && new_id != 0)
+        eq_num("Stop-valid", old_dm.Stop(old_id), new_dm.Stop(new_id));
+
+    eq_num("Stop-invalid", old_dm.Stop(0), new_dm.Stop(0));
+
+    BOOL enabled = FALSE;
+    if (SUCCEEDED(::DwmIsCompositionEnabled(&enabled))) {
+        const long current = enabled ? 1 : 0;
+        eq_num("SetAero-current",
+               old_dm.SetAero(current),
+               new_dm.SetAero(current));
+    }
+    eq_num("SetAero-invalid-low", old_dm.SetAero(-1), new_dm.SetAero(-1));
+    eq_num("SetAero-invalid-high", old_dm.SetAero(2), new_dm.SetAero(2));
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1291,6 +1372,7 @@ int main(int argc, char **argv) {
         test_position_algorithms(old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
+        test_audio_aero(old_dm, new_dm);
         test_system_identity(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
