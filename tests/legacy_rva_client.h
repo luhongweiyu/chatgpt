@@ -274,6 +274,20 @@ public:
     long Stop(long id) { using F=long(WINAPI*)(long,long); return at<F>(123600)(obj_,id); }
     long SetAero(long enable) { using F=long(WINAPI*)(long,long); return at<F>(103056)(obj_,enable); }
 
+    long EnablePicCache(long en) { using F=long(WINAPI*)(long,long); return at<F>(107392)(obj_,en); }
+    const char *MatchPicName(PCSTR pic_name) { using F=PCSTR(WINAPI*)(long,PCSTR); return at<F>(111952)(obj_,pic_name); }
+    long LoadPic(PCSTR pic_name) { using F=long(WINAPI*)(long,PCSTR); return at<F>(126752)(obj_,pic_name); }
+    long FreePic(PCSTR pic_name) { using F=long(WINAPI*)(long,PCSTR); return at<F>(119392)(obj_,pic_name); }
+    const char *GetPicSize(PCSTR pic_name) { using F=PCSTR(WINAPI*)(long,PCSTR); return at<F>(111072)(obj_,pic_name); }
+    long FindPic(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,double sim,long dir,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long,long*,long*); return at<F>(106320)(obj_,x1,y1,x2,y2,pic,delta,sim,dir,x,y); }
+    const char *FindPicE(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long); return at<F>(103440)(obj_,x1,y1,x2,y2,pic,delta,sim,dir); }
+    const char *FindPicEx(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long); return at<F>(113184)(obj_,x1,y1,x2,y2,pic,delta,sim,dir); }
+    const char *FindPicS(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,double sim,long dir,long *x,long *y) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long,long*,long*); return at<F>(127056)(obj_,x1,y1,x2,y2,pic,delta,sim,dir,x,y); }
+    const char *FindPicExS(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long); return at<F>(116096)(obj_,x1,y1,x2,y2,pic,delta,sim,dir); }
+    long FindPicSim(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,long sim,long dir,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long,long*,long*); return at<F>(103920)(obj_,x1,y1,x2,y2,pic,delta,sim,dir,x,y); }
+    const char *FindPicSimE(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,long sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long); return at<F>(119600)(obj_,x1,y1,x2,y2,pic,delta,sim,dir); }
+    const char *FindPicSimEx(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,long sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long); return at<F>(112688)(obj_,x1,y1,x2,y2,pic,delta,sim,dir); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
