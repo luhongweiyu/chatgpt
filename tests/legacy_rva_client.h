@@ -190,6 +190,13 @@ public:
     long GetOsType() { using F=long(WINAPI*)(long); return at<F>(126800)(obj_); }
     const char *GetProcessInfo(long pid) { using F=PCSTR(WINAPI*)(long,long); return at<F>(106576)(obj_,pid); }
 
+    long GetSpecialWindow(long flag) { using F=long(WINAPI*)(long,long); return at<F>(111904)(obj_,flag); }
+    const char *GetCommandLine(long hwnd) { using F=PCSTR(WINAPI*)(long,long); return at<F>(102432)(obj_,hwnd); }
+    const char *GetDiskModel(long index) { using F=PCSTR(WINAPI*)(long,long); return at<F>(124624)(obj_,index); }
+    const char *GetDiskReversion(long index) { using F=PCSTR(WINAPI*)(long,long); return at<F>(117120)(obj_,index); }
+    const char *GetDiskSerial(long index) { using F=PCSTR(WINAPI*)(long,long); return at<F>(101376)(obj_,index); }
+    const char *GetDisplayInfo() { using F=PCSTR(WINAPI*)(long); return at<F>(113968)(obj_); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
