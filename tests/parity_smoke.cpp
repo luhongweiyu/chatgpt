@@ -363,6 +363,59 @@ void test_window(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     ::UnregisterClassA(cls, wc.hInstance);
 }
 
+
+void test_pure_extended(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    for (const char *v : {"", "a", "abc", "hello world", "中文"}) {
+        const char *a = old_dm.Md5(v);
+        const char *b = new_dm.Md5(v);
+        eq_str("Md5", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    for (const char *v : {"", "1,2", "1,2|3,4", "-5,6|7,-8|9,10,extra"}) {
+        eq_num("GetResultCount", old_dm.GetResultCount(v), new_dm.GetResultCount(v));
+        for (long i = -1; i < 5; ++i) {
+            long ox=111, oy=222, nx=111, ny=222;
+            const long orv = old_dm.GetResultPos(v, i, &ox, &oy);
+            const long nrv = new_dm.GetResultPos(v, i, &nx, &ny);
+            eq_num("GetResultPos-ret", orv, nrv);
+            eq_num("GetResultPos-x", ox, nx);
+            eq_num("GetResultPos-y", oy, ny);
+        }
+    }
+
+    const LONGLONG ints[] = {0,1,-1,0x12345678LL,0x123456789abcdef0LL};
+    for (long type = -1; type <= 7; ++type) {
+        for (LONGLONG v : ints) {
+            const char *a = old_dm.IntToData(v, type);
+            const char *b = new_dm.IntToData(v, type);
+            eq_str("IntToData", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+        }
+    }
+
+    for (float v : {0.0f, 1.0f, -1.0f, 1.5f, 123.25f}) {
+        const char *a = old_dm.FloatToData(v);
+        const char *b = new_dm.FloatToData(v);
+        eq_str("FloatToData", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    for (double v : {0.0, 1.0, -1.0, 1.5, 123456.25}) {
+        const char *a = old_dm.DoubleToData(v);
+        const char *b = new_dm.DoubleToData(v);
+        eq_str("DoubleToData", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    for (const char *v : {"", "abc", "A B", "中文"}) {
+        for (long type = -1; type <= 2; ++type) {
+            const char *a = old_dm.StringToData(v, type);
+            const char *b = new_dm.StringToData(v, type);
+            eq_str("StringToData", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+        }
+    }
+
+    eq_num("GetLocale", old_dm.GetLocale(), new_dm.GetLocale());
+    eq_num("CheckUAC", old_dm.CheckUAC(), new_dm.CheckUAC());
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -378,6 +431,7 @@ int main(int argc, char **argv) {
         dmsoft new_dm;
 
         test_pure(old_dm, new_dm);
+        test_pure_extended(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
