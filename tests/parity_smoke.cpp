@@ -1277,6 +1277,11 @@ int main(int argc, char **argv) {
 
     try {
         LegacyRvaClient old_dm(legacy_path);
+        if (old_dm.DumpRuntimeVtable("legacy_runtime_vtable_before.csv"))
+            std::puts("Wrote legacy_runtime_vtable_before.csv");
+        else
+            std::puts("Failed to dump legacy runtime vtable before tests.");
+
         LoadDm(nullptr);
         dmsoft new_dm;
 
@@ -1294,6 +1299,11 @@ int main(int argc, char **argv) {
         test_color_core(old_dm, new_dm);
 
         FreeDm();
+
+        if (old_dm.DumpRuntimeVtable("legacy_runtime_vtable_after.csv"))
+            std::puts("Wrote legacy_runtime_vtable_after.csv");
+        else
+            std::puts("Failed to dump legacy runtime vtable after tests.");
 
         std::printf("\nSUMMARY passes=%d failures=%d\n", g_passes, g_failures);
         return g_failures == 0 ? 0 : 1;
