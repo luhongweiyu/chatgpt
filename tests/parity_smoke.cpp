@@ -913,6 +913,101 @@ void test_word_result_and_input(LegacyRvaClient &old_dm, dmsoft &new_dm) {
            new_dm.KeyPressStr("", 1));
 }
 
+
+std::vector<std::string> split_pipe_test(const std::string &value) {
+    std::vector<std::string> out;
+    size_t begin = 0;
+    for (;;) {
+        const size_t pos = value.find('|', begin);
+        if (pos == std::string::npos) {
+            out.push_back(value.substr(begin));
+            break;
+        }
+        out.push_back(value.substr(begin, pos - begin));
+        begin = pos + 1;
+    }
+    return out;
+}
+
+void test_system_identity(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    for (long flag = -1; flag <= 2; ++flag) {
+        eq_num(("GetSpecialWindow-" + std::to_string(flag)).c_str(),
+               old_dm.GetSpecialWindow(flag),
+               new_dm.GetSpecialWindow(flag));
+    }
+
+    const long pid = static_cast<long>(::GetCurrentProcessId());
+    old_dm.SetMemoryHwndAsProcessId(1);
+    new_dm.SetMemoryHwndAsProcessId(1);
+    {
+        const char *a = old_dm.GetCommandLine(pid);
+        const char *b = new_dm.GetCommandLine(pid);
+        eq_str("GetCommandLine-self",
+               a ? std::string(a) : "<null>",
+               b ? std::string(b) : "<null>");
+    }
+    old_dm.SetMemoryHwndAsProcessId(0);
+    new_dm.SetMemoryHwndAsProcessId(0);
+
+    for (long index = -1; index <= 6; ++index) {
+        {
+            const char *a = old_dm.GetDiskModel(index);
+            const char *b = new_dm.GetDiskModel(index);
+            eq_str(("GetDiskModel-" + std::to_string(index)).c_str(),
+                   a ? std::string(a) : "<null>",
+                   b ? std::string(b) : "<null>");
+        }
+        {
+            const char *a = old_dm.GetDiskReversion(index);
+            const char *b = new_dm.GetDiskReversion(index);
+            eq_str(("GetDiskReversion-" + std::to_string(index)).c_str(),
+                   a ? std::string(a) : "<null>",
+                   b ? std::string(b) : "<null>");
+        }
+        {
+            const char *a = old_dm.GetDiskSerial(index);
+            const char *b = new_dm.GetDiskSerial(index);
+            eq_str(("GetDiskSerial-" + std::to_string(index)).c_str(),
+                   a ? std::string(a) : "<null>",
+                   b ? std::string(b) : "<null>");
+        }
+    }
+
+    {
+        const char *a = old_dm.GetDisplayInfo();
+        const char *b = new_dm.GetDisplayInfo();
+        eq_str("GetDisplayInfo",
+               a ? std::string(a) : "<null>",
+               b ? std::string(b) : "<null>");
+    }
+
+    // GetProcessInfo deliberately samples for about one second. CPU and working-set
+    // values can change between the two sequential calls, so compare the stable
+    // fields and validate the documented 4-field shape/ranges.
+    {
+        const char *a_raw = old_dm.GetProcessInfo(pid);
+        const std::string a = a_raw ? a_raw : "";
+        const char *b_raw = new_dm.GetProcessInfo(pid);
+        const std::string b = b_raw ? b_raw : "";
+        const auto af = split_pipe_test(a);
+        const auto bf = split_pipe_test(b);
+        eq_num("GetProcessInfo-field-count-old", static_cast<long>(af.size()), 4L);
+        eq_num("GetProcessInfo-field-count-new", static_cast<long>(bf.size()), 4L);
+        if (af.size() == 4 && bf.size() == 4) {
+            eq_str("GetProcessInfo-name", af[0], bf[0]);
+            eq_str("GetProcessInfo-path", af[1], bf[1]);
+            const long old_cpu = std::strtol(af[2].c_str(), nullptr, 10);
+            const long new_cpu = std::strtol(bf[2].c_str(), nullptr, 10);
+            eq_num("GetProcessInfo-old-cpu-range", old_cpu >= 0 && old_cpu <= 100 ? 1L : 0L, 1L);
+            eq_num("GetProcessInfo-new-cpu-range", new_cpu >= 0 && new_cpu <= 100 ? 1L : 0L, 1L);
+            const unsigned long long old_mem = std::strtoull(af[3].c_str(), nullptr, 10);
+            const unsigned long long new_mem = std::strtoull(bf[3].c_str(), nullptr, 10);
+            eq_num("GetProcessInfo-old-memory-nonzero", old_mem > 0 ? 1L : 0L, 1L);
+            eq_num("GetProcessInfo-new-memory-nonzero", new_mem > 0 ? 1L : 0L, 1L);
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -933,6 +1028,7 @@ int main(int argc, char **argv) {
         test_position_algorithms(old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
+        test_system_identity(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
         test_memory(old_dm, new_dm);
