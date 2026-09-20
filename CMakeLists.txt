@@ -33,7 +33,7 @@ target_include_directories(hcbyj64
 
 target_compile_features(hcbyj64 PRIVATE cxx_std_17)
 target_compile_definitions(hcbyj64 PRIVATE HCBYJ64_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(hcbyj64 PRIVATE Ole32 OleAut32)
+target_link_libraries(hcbyj64 PRIVATE Ole32 OleAut32 Advapi32)
 
 if(MSVC)
     target_compile_options(hcbyj64 PRIVATE /W4 /permissive- /EHsc)
