@@ -305,4 +305,250 @@ long dmsoft::VirtualFreeEx(long hwnd,LONGLONG addr) {
     if(!ok)SetNativeError(p,static_cast<long>(::GetLastError()));else SetNativeError(p,0);CloseHandle(h);return ok?1:0;
 }
 
+
+long dmsoft::GetScreenWidth() { return ::GetSystemMetrics(SM_CXSCREEN); }
+long dmsoft::GetScreenHeight() { return ::GetSystemMetrics(SM_CYSCREEN); }
+
+long dmsoft::GetScreenDepth() {
+    HDC dc = ::GetDC(nullptr);
+    if (!dc) return 0;
+    const int depth = ::GetDeviceCaps(dc, BITSPIXEL) * ::GetDeviceCaps(dc, PLANES);
+    ::ReleaseDC(nullptr, dc);
+    return static_cast<long>(depth);
+}
+
+long dmsoft::GetDPI() {
+    HDC dc = ::GetDC(nullptr);
+    if (!dc) return 96;
+    const int dpi = ::GetDeviceCaps(dc, LOGPIXELSX);
+    ::ReleaseDC(nullptr, dc);
+    return static_cast<long>(dpi > 0 ? dpi : 96);
+}
+
+long dmsoft::IsFileExist(PCSTR file) {
+    if (!file || !*file) return 0;
+    const DWORD a = ::GetFileAttributesA(file);
+    return (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+}
+
+long dmsoft::IsFolderExist(PCSTR folder) {
+    if (!folder || !*folder) return 0;
+    const DWORD a = ::GetFileAttributesA(folder);
+    return (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+}
+
+long dmsoft::CreateFolder(PCSTR folder_name) {
+    if (!folder_name || !*folder_name) return 0;
+    std::error_code ec;
+    if (std::filesystem::exists(folder_name, ec)) return std::filesystem::is_directory(folder_name, ec) ? 1 : 0;
+    return std::filesystem::create_directories(folder_name, ec) && !ec ? 1 : 0;
+}
+
+long dmsoft::DeleteFolder(PCSTR folder_name) {
+    if (!folder_name || !*folder_name) return 0;
+    std::error_code ec;
+    std::filesystem::remove_all(folder_name, ec);
+    return ec ? 0 : 1;
+}
+
+long dmsoft::DeleteFile(PCSTR file) {
+    if (!file || !*file) return 0;
+    return ::DeleteFileA(file) ? 1 : 0;
+}
+
+long dmsoft::MoveFile(PCSTR src_file, PCSTR dst_file) {
+    if (!src_file || !dst_file) return 0;
+    return ::MoveFileExA(src_file, dst_file, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING) ? 1 : 0;
+}
+
+long dmsoft::CopyFile(PCSTR src_file, PCSTR dst_file, long over) {
+    if (!src_file || !dst_file) return 0;
+    return ::CopyFileA(src_file, dst_file, over ? FALSE : TRUE) ? 1 : 0;
+}
+
+long dmsoft::GetFileLength(PCSTR file) {
+    if (!file) return -1;
+    WIN32_FILE_ATTRIBUTE_DATA d{};
+    if (!::GetFileAttributesExA(file, GetFileExInfoStandard, &d)) return -1;
+    ULARGE_INTEGER u{};
+    u.LowPart = d.nFileSizeLow;
+    u.HighPart = d.nFileSizeHigh;
+    return u.QuadPart > static_cast<ULONGLONG>(LONG_MAX) ? LONG_MAX : static_cast<long>(u.QuadPart);
+}
+
+long dmsoft::WriteFile(PCSTR file, PCSTR content) {
+    if (!file || !content) return 0;
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    if (!out) return 0;
+    out.write(content, static_cast<std::streamsize>(std::strlen(content)));
+    return out.good() ? 1 : 0;
+}
+
+const char *dmsoft::ReadFile(PCSTR file) {
+    auto *p = P(impl);
+    if (!p || !file) return "";
+    std::ifstream in(file, std::ios::binary);
+    if (!in) { p->scratch.clear(); return p->scratch.c_str(); }
+    p->scratch.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::ReadFileData(PCSTR file, long start_pos, long end_pos) {
+    auto *p = P(impl);
+    if (!p || !file || start_pos < 0) return "";
+    std::ifstream in(file, std::ios::binary);
+    if (!in) { p->scratch.clear(); return p->scratch.c_str(); }
+    in.seekg(0, std::ios::end);
+    const std::streamoff size = in.tellg();
+    if (size <= 0 || start_pos >= size) { p->scratch.clear(); return p->scratch.c_str(); }
+    const std::streamoff end = (end_pos < start_pos || end_pos < 0)
+        ? size : std::min<std::streamoff>(size, static_cast<std::streamoff>(end_pos) + 1);
+    const std::streamoff len = end - static_cast<std::streamoff>(start_pos);
+    p->scratch.resize(static_cast<size_t>(len));
+    in.seekg(start_pos, std::ios::beg);
+    in.read(p->scratch.data(), len);
+    p->scratch.resize(static_cast<size_t>(in.gcount()));
+    return p->scratch.c_str();
+}
+
+long dmsoft::WriteIni(PCSTR section, PCSTR key, PCSTR v, PCSTR file) {
+    if (!section || !key || !file) return 0;
+    return ::WritePrivateProfileStringA(section, key, v ? v : "", file) ? 1 : 0;
+}
+
+const char *dmsoft::ReadIni(PCSTR section, PCSTR key, PCSTR file) {
+    auto *p = P(impl);
+    if (!p || !section || !key || !file) return "";
+    std::vector<char> buf(65536);
+    const DWORD n = ::GetPrivateProfileStringA(section, key, "", buf.data(), static_cast<DWORD>(buf.size()), file);
+    p->scratch.assign(buf.data(), n);
+    return p->scratch.c_str();
+}
+
+long dmsoft::DeleteIni(PCSTR section, PCSTR key, PCSTR file) {
+    if (!section || !file) return 0;
+    return ::WritePrivateProfileStringA(section, key, nullptr, file) ? 1 : 0;
+}
+
+const char *dmsoft::EnumIniKey(PCSTR section, PCSTR file) {
+    auto *p = P(impl);
+    if (!p || !section || !file) return "";
+    std::vector<char> buf(65536, 0);
+    ::GetPrivateProfileStringA(section, nullptr, "", buf.data(), static_cast<DWORD>(buf.size()), file);
+    p->scratch = JoinMultiSz(buf.data(), buf.size());
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::EnumIniSection(PCSTR file) {
+    auto *p = P(impl);
+    if (!p || !file) return "";
+    std::vector<char> buf(65536, 0);
+    ::GetPrivateProfileSectionNamesA(buf.data(), static_cast<DWORD>(buf.size()), file);
+    p->scratch = JoinMultiSz(buf.data(), buf.size());
+    return p->scratch.c_str();
+}
+
+long dmsoft::SetEnv(long index, PCSTR name, PCSTR value) {
+    auto *p = P(impl);
+    if (!p || !name) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->env[{index, name}] = value ? value : "";
+    return 1;
+}
+
+long dmsoft::DelEnv(long index, PCSTR name) {
+    auto *p = P(impl);
+    if (!p || !name) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    return p->env.erase({index, name}) ? 1 : 0;
+}
+
+const char *dmsoft::GetEnv(long index, PCSTR name) {
+    auto *p = P(impl);
+    if (!p || !name) return "";
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    const auto it = p->env.find({index, name});
+    p->scratch = it == p->env.end() ? "" : it->second;
+    return p->scratch.c_str();
+}
+
+long dmsoft::GetMemoryUsage() {
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof(ms);
+    return ::GlobalMemoryStatusEx(&ms) ? static_cast<long>(ms.dwMemoryLoad) : 0;
+}
+
+long dmsoft::GetCpuUsage() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    FILETIME idle{}, kernel{}, user{};
+    if (!::GetSystemTimes(&idle, &kernel, &user)) return 0;
+    const ULONGLONG i = FileTime64(idle), k = FileTime64(kernel), u = FileTime64(user);
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->cpu_sample_valid) {
+        p->prev_idle = i; p->prev_kernel = k; p->prev_user = u; p->cpu_sample_valid = true;
+        return 0;
+    }
+    const ULONGLONG di = i - p->prev_idle, dk = k - p->prev_kernel, du = u - p->prev_user;
+    p->prev_idle = i; p->prev_kernel = k; p->prev_user = u;
+    const ULONGLONG total = dk + du;
+    if (!total) return 0;
+    const ULONGLONG busy = total > di ? total - di : 0;
+    return static_cast<long>((busy * 100) / total);
+}
+
+long dmsoft::CheckFontSmooth() {
+    BOOL enabled = FALSE;
+    return ::SystemParametersInfoA(SPI_GETFONTSMOOTHING, 0, &enabled, 0) && enabled ? 1 : 0;
+}
+
+long dmsoft::EnableFontSmooth() {
+    return ::SystemParametersInfoA(SPI_SETFONTSMOOTHING, TRUE, nullptr, SPIF_SENDCHANGE) ? 1 : 0;
+}
+
+long dmsoft::DisableFontSmooth() {
+    return ::SystemParametersInfoA(SPI_SETFONTSMOOTHING, FALSE, nullptr, SPIF_SENDCHANGE) ? 1 : 0;
+}
+
+long dmsoft::DisablePowerSave() {
+    return ::SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) ? 1 : 0;
+}
+
+long dmsoft::DisableScreenSave() {
+    return ::SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED) ? 1 : 0;
+}
+
+long dmsoft::DisableCloseDisplayAndSleep() {
+    return ::SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED) ? 1 : 0;
+}
+
+long dmsoft::StrStr(PCSTR s, PCSTR str) {
+    if (!s || !str) return -1;
+    const char *p = std::strstr(s, str);
+    return p ? static_cast<long>(p - s) : -1;
+}
+
+const char *dmsoft::RGB2BGR(PCSTR rgb_color) {
+    auto *p = P(impl);
+    if (!p || !rgb_color) return "";
+    std::string v(rgb_color);
+    if (v.size() == 6) p->scratch = v.substr(4,2) + v.substr(2,2) + v.substr(0,2);
+    else p->scratch = v;
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::BGR2RGB(PCSTR bgr_color) { return RGB2BGR(bgr_color); }
+
+long dmsoft::GetOsBuildNumber() {
+    using RtlGetVersionFn = LONG (WINAPI *)(PRTL_OSVERSIONINFOW);
+    HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    auto fn = ntdll ? reinterpret_cast<RtlGetVersionFn>(::GetProcAddress(ntdll, "RtlGetVersion")) : nullptr;
+    if (!fn) return 0;
+    RTL_OSVERSIONINFOW vi{};
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    return fn(&vi) == 0 ? static_cast<long>(vi.dwBuildNumber) : 0;
+}
+
+long dmsoft::GetTime() { return static_cast<long>(::GetTickCount()); }
+
 #include "legacy_dm_generated.inc"
