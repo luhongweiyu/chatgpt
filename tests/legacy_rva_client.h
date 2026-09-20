@@ -128,6 +128,14 @@ public:
     long Beep(long fre,long delay) { using F=long(WINAPI*)(long,long,long); return at<F>(104624)(obj_,fre,delay); }
     long RunApp(PCSTR path,long mode) { using F=long(WINAPI*)(long,PCSTR,long); return at<F>(116544)(obj_,path,mode); }
 
+    long SetPath(PCSTR path) { using F=long(WINAPI*)(long,PCSTR); return at<F>(111856)(obj_,path); }
+    const char *GetPath() { using F=PCSTR(WINAPI*)(long); return at<F>(122912)(obj_); }
+    const char *GetBasePath() { using F=PCSTR(WINAPI*)(long); return at<F>(103536)(obj_); }
+    long GetID() { using F=long(WINAPI*)(long); return at<F>(105056)(obj_); }
+    long GetDmCount() { using F=long(WINAPI*)(long); return at<F>(114944)(obj_); }
+    long SetEnumWindowDelay(long delay) { using F=long(WINAPI*)(long,long); return at<F>(109088)(obj_,delay); }
+    long SetShowErrorMsg(long show) { using F=long(WINAPI*)(long,long); return at<F>(118560)(obj_,show); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
