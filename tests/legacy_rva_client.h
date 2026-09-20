@@ -288,6 +288,10 @@ public:
     const char *FindPicSimE(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,long sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long); return at<F>(119600)(obj_,x1,y1,x2,y2,pic,delta,sim,dir); }
     const char *FindPicSimEx(long x1,long y1,long x2,long y2,PCSTR pic,PCSTR delta,long sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long); return at<F>(112688)(obj_,x1,y1,x2,y2,pic,delta,sim,dir); }
 
+    long CapturePng(long x1,long y1,long x2,long y2,PCSTR file) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR); return at<F>(124336)(obj_,x1,y1,x2,y2,file); }
+    long CaptureJpg(long x1,long y1,long x2,long y2,PCSTR file,long quality) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,long); return at<F>(106144)(obj_,x1,y1,x2,y2,file,quality); }
+    long ImageToBmp(PCSTR pic_name,PCSTR bmp_name) { using F=long(WINAPI*)(long,PCSTR,PCSTR); return at<F>(107600)(obj_,pic_name,bmp_name); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
