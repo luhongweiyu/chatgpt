@@ -1182,6 +1182,86 @@ void test_color_core(LegacyRvaClient &old_dm, dmsoft &new_dm) {
         eq_str("FindColorEx", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
     }
 
+
+
+    const char *multi_offsets =
+        "32|0|00ff00-000000,0|32|0000ff-000000,32|32|ffffff-000000";
+    for (long dir = 0; dir <= 3; ++dir) {
+        long ox=-1, oy=-1, nx=-1, ny=-1;
+        const long orv = old_dm.FindMultiColor(
+            x1, y1, x1 + 31, y1 + 31,
+            "ff0000-000000", multi_offsets, 1.0, dir, &ox, &oy);
+        const long nrv = new_dm.FindMultiColor(
+            x1, y1, x1 + 31, y1 + 31,
+            "ff0000-000000", multi_offsets, 1.0, dir, &nx, &ny);
+        eq_num(("FindMultiColor-ret-" + std::to_string(dir)).c_str(), orv, nrv);
+        eq_num(("FindMultiColor-x-" + std::to_string(dir)).c_str(), ox, nx);
+        eq_num(("FindMultiColor-y-" + std::to_string(dir)).c_str(), oy, ny);
+    }
+    {
+        const char *a = old_dm.FindMultiColorE(
+            x1, y1, x1 + 31, y1 + 31,
+            "ff0000-000000", multi_offsets, 1.0, 0);
+        const char *b = new_dm.FindMultiColorE(
+            x1, y1, x1 + 31, y1 + 31,
+            "ff0000-000000", multi_offsets, 1.0, 0);
+        eq_str("FindMultiColorE", a ? std::string(a) : "<null>",
+                                   b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.FindMultiColorEx(
+            x1, y1, x1 + 3, y1 + 3,
+            "ff0000-000000", multi_offsets, 1.0, 0);
+        const char *b = new_dm.FindMultiColorEx(
+            x1, y1, x1 + 3, y1 + 3,
+            "ff0000-000000", multi_offsets, 1.0, 0);
+        eq_str("FindMultiColorEx", a ? std::string(a) : "<null>",
+                                    b ? std::string(b) : "<null>");
+    }
+
+    const char *shape = "1|0|1,32|0|0,0|32|0,1|1|1";
+    for (long dir = 0; dir <= 3; ++dir) {
+        long ox=-1, oy=-1, nx=-1, ny=-1;
+        const long orv = old_dm.FindShape(
+            x1, y1, x1 + 15, y1 + 15, shape, 1.0, dir, &ox, &oy);
+        const long nrv = new_dm.FindShape(
+            x1, y1, x1 + 15, y1 + 15, shape, 1.0, dir, &nx, &ny);
+        eq_num(("FindShape-ret-" + std::to_string(dir)).c_str(), orv, nrv);
+        eq_num(("FindShape-x-" + std::to_string(dir)).c_str(), ox, nx);
+        eq_num(("FindShape-y-" + std::to_string(dir)).c_str(), oy, ny);
+    }
+    {
+        const char *a = old_dm.FindShapeE(
+            x1, y1, x1 + 15, y1 + 15, shape, 1.0, 0);
+        const char *b = new_dm.FindShapeE(
+            x1, y1, x1 + 15, y1 + 15, shape, 1.0, 0);
+        eq_str("FindShapeE", a ? std::string(a) : "<null>",
+                             b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.FindShapeEx(
+            x1, y1, x1 + 3, y1 + 3, shape, 1.0, 0);
+        const char *b = new_dm.FindShapeEx(
+            x1, y1, x1 + 3, y1 + 3, shape, 1.0, 0);
+        eq_str("FindShapeEx", a ? std::string(a) : "<null>",
+                              b ? std::string(b) : "<null>");
+    }
+
+    eq_num("FindMulColor-all-present",
+           old_dm.FindMulColor(
+               x1, y1, x2, y2,
+               "ff0000-000000|00ff00-000000|0000ff-000000|ffffff-000000", 1.0),
+           new_dm.FindMulColor(
+               x1, y1, x2, y2,
+               "ff0000-000000|00ff00-000000|0000ff-000000|ffffff-000000", 1.0));
+    eq_num("FindMulColor-one-missing",
+           old_dm.FindMulColor(
+               x1, y1, x2, y2,
+               "ff0000-000000|000000-000000", 1.0),
+           new_dm.FindMulColor(
+               x1, y1, x2, y2,
+               "ff0000-000000|000000-000000", 1.0));
+
     ::DestroyWindow(hwnd);
     ::UnregisterClassA(cls, wc.hInstance);
 }
