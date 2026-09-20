@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cwchar>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <system_error>
