@@ -743,6 +743,45 @@ void test_basic_settings(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("GetID-recovered-nonzero", new_id1 != 0 ? 1 : 0, 1);
 }
 
+
+void test_position_algorithms(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    struct Case { long type; const char *text; };
+    const Case cases[] = {
+        {0, "0,10,20|2,100,200|1,30,40|3,10,10"},
+        {1, "10,20|100,200|30,40|10,10"},
+        {2, "A$10$20|B$100$200|C$30$40|D$10$10"},
+        {3, "a.bmp,10,20|b.bmp,100,200|c.bmp,30,40|d.bmp,10,10"},
+    };
+
+    for (const auto &c : cases) {
+        {
+            const char *a = old_dm.ExcludePos(c.text, c.type, 9, 9, 30, 40);
+            const char *b = new_dm.ExcludePos(c.text, c.type, 9, 9, 30, 40);
+            eq_str("ExcludePos", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+        }
+        {
+            const char *a = old_dm.FindNearestPos(c.text, c.type, 11, 12);
+            const char *b = new_dm.FindNearestPos(c.text, c.type, 11, 12);
+            eq_str("FindNearestPos", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+        }
+        {
+            const char *a = old_dm.SortPosDistance(c.text, c.type, 0, 0);
+            const char *b = new_dm.SortPosDistance(c.text, c.type, 0, 0);
+            eq_str("SortPosDistance-distance", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+        }
+        {
+            const char *a = old_dm.SortPosDistance(c.text, c.type, 65535, 0);
+            const char *b = new_dm.SortPosDistance(c.text, c.type, 65535, 0);
+            eq_str("SortPosDistance-x", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+        }
+        {
+            const char *a = old_dm.SortPosDistance(c.text, c.type, 0, 65535);
+            const char *b = new_dm.SortPosDistance(c.text, c.type, 0, 65535);
+            eq_str("SortPosDistance-y", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -760,6 +799,7 @@ int main(int argc, char **argv) {
         test_pure(old_dm, new_dm);
         test_pure_extended(old_dm, new_dm);
         test_basic_settings(old_dm, new_dm);
+        test_position_algorithms(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
