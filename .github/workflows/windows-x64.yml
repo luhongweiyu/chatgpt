@@ -56,4 +56,4 @@ jobs:
           path: |
             build/Release/${{ matrix.dll }}
             build/Release/*.lib
-            build/Release/hcbyj64_smoke.exe
+            build/Release/*.exe
