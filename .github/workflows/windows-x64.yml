@@ -1,0 +1,35 @@
+name: Windows x64 build
+
+on:
+  push:
+    branches: [hcbyj64-recovery]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure x64
+        shell: pwsh
+        run: cmake -S . -B build -A x64 -G "Visual Studio 17 2022"
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+      - name: Verify PE machine
+        shell: pwsh
+        run: |
+          $dll = Resolve-Path build/Release/hcbyj64.dll
+          $bytes = [IO.File]::ReadAllBytes($dll)
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          if ($machine -ne 0x8664) { throw "hcbyj64.dll is not AMD64: 0x$($machine.ToString('X4'))" }
+          Write-Host "Verified AMD64 PE: $dll"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hcbyj64-x64-release
+          path: |
+            build/Release/hcbyj64.dll
+            build/Release/hcbyj64.lib
+            build/Release/hcbyj64_smoke.exe
