@@ -690,6 +690,19 @@ void test_window(LegacyRvaClient &old_dm, dmsoft &new_dm) {
 
         eq_num("SendPaste-edit-ret", old_paste_ret, new_paste_ret);
         eq_str("SendPaste-edit-effect", old_paste, new_paste);
+
+        ::SetWindowTextA(edit, "");
+        const long old_send_ret = old_dm.SendString(edit_h, "Abc123");
+        char old_send[128]{};
+        ::GetWindowTextA(edit, old_send, sizeof(old_send));
+
+        ::SetWindowTextA(edit, "");
+        const long new_send_ret = new_dm.SendString(edit_h, "Abc123");
+        char new_send[128]{};
+        ::GetWindowTextA(edit, new_send, sizeof(new_send));
+
+        eq_num("SendString-edit-ret", old_send_ret, new_send_ret);
+        eq_str("SendString-edit-effect", old_send, new_send);
         ::DestroyWindow(edit);
     }
 
