@@ -14,11 +14,11 @@ jobs:
       matrix:
         include:
           - arch: Win32
-            machine: 0x014c
+            machine: "014C"
             dll: hcbyj32_recovered.dll
             artifact: hcbyj32-recovered-release
           - arch: x64
-            machine: 0x8664
+            machine: "8664"
             dll: hcbyj64.dll
             artifact: hcbyj64-release
 
@@ -46,7 +46,7 @@ jobs:
           $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
           $expected = [Convert]::ToUInt16("${{ matrix.machine }}", 16)
           if ($machine -ne $expected) {
-            throw "Unexpected PE machine: 0x$($machine.ToString('X4')); expected ${{ matrix.machine }}"
+            throw "Unexpected PE machine: 0x$($machine.ToString('X4')); expected 0x${{ matrix.machine }}"
           }
           Write-Host "Verified ${{ matrix.arch }} PE: $dll"
 
