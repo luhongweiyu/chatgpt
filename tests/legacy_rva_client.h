@@ -186,6 +186,10 @@ public:
 
     long SendString(long hwnd,PCSTR str) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(119888)(obj_,hwnd,str); }
 
+    const char *GetDir(long type) { using F=PCSTR(WINAPI*)(long,long); return at<F>(114624)(obj_,type); }
+    long GetOsType() { using F=long(WINAPI*)(long); return at<F>(126800)(obj_); }
+    const char *GetProcessInfo(long pid) { using F=PCSTR(WINAPI*)(long,long); return at<F>(106576)(obj_,pid); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
