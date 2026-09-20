@@ -441,6 +441,233 @@ long WindowsMouseSpeedFromLevelCompat(long level) {
     return map[level - 1];
 }
 
+
+LONGLONG ModuleBaseForPidCompat(DWORD pid, const std::string &module_name) {
+    HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+
+    MODULEENTRY32 me{};
+    me.dwSize = sizeof(me);
+    LONGLONG result = 0;
+    if (::Module32First(snap, &me)) {
+        do {
+            if (_stricmp(me.szModule, module_name.c_str()) == 0 ||
+                _stricmp(me.szExePath, module_name.c_str()) == 0) {
+                result = static_cast<LONGLONG>(reinterpret_cast<ULONG_PTR>(me.modBaseAddr));
+                break;
+            }
+        } while (::Module32Next(snap, &me));
+    }
+    ::CloseHandle(snap);
+    return result;
+}
+
+class AddressExprParserCompat {
+public:
+    AddressExprParserCompat(HANDLE process, DWORD pid, bool target64, PCSTR text)
+        : process_(process), pid_(pid), target64_(target64), text_(text ? text : "") {}
+
+    bool Parse(ULONGLONG &value) {
+        pos_ = 0;
+        SkipSpace();
+        if (!ParseExpr(value)) return false;
+        SkipSpace();
+        return pos_ == text_.size();
+    }
+
+private:
+    void SkipSpace() {
+        while (pos_ < text_.size() &&
+               std::isspace(static_cast<unsigned char>(text_[pos_]))) ++pos_;
+    }
+
+    bool ParseExpr(ULONGLONG &value) {
+        if (!ParsePrimary(value)) return false;
+        for (;;) {
+            SkipSpace();
+            if (pos_ >= text_.size() || text_[pos_] == ']') return true;
+            const char op = text_[pos_];
+            if (op != '+' && op != '-') return false;
+            ++pos_;
+            ULONGLONG rhs = 0;
+            if (!ParsePrimary(rhs)) return false;
+            if (op == '+') value += rhs;
+            else value -= rhs;
+        }
+    }
+
+    bool ParsePrimary(ULONGLONG &value) {
+        SkipSpace();
+        if (pos_ >= text_.size()) return false;
+
+        if (text_[pos_] == '[') {
+            ++pos_;
+            ULONGLONG address = 0;
+            if (!ParseExpr(address)) return false;
+            SkipSpace();
+            if (pos_ >= text_.size() || text_[pos_] != ']') return false;
+            ++pos_;
+
+            SIZE_T got = 0;
+            if (target64_) {
+                ULONGLONG ptr = 0;
+                if (!::ReadProcessMemory(
+                        process_,
+                        reinterpret_cast<LPCVOID>(static_cast<ULONG_PTR>(address)),
+                        &ptr, sizeof(ptr), &got) ||
+                    got != sizeof(ptr)) return false;
+                value = ptr;
+            } else {
+                DWORD ptr = 0;
+                if (!::ReadProcessMemory(
+                        process_,
+                        reinterpret_cast<LPCVOID>(static_cast<ULONG_PTR>(address)),
+                        &ptr, sizeof(ptr), &got) ||
+                    got != sizeof(ptr)) return false;
+                value = ptr;
+            }
+            return true;
+        }
+
+        if (text_[pos_] == '<') {
+            const size_t begin = ++pos_;
+            while (pos_ < text_.size() && text_[pos_] != '>') ++pos_;
+            if (pos_ >= text_.size() || pos_ == begin) return false;
+            const std::string module = text_.substr(begin, pos_ - begin);
+            ++pos_;
+            const LONGLONG base = ModuleBaseForPidCompat(pid_, module);
+            if (!base) return false;
+            value = static_cast<ULONGLONG>(base);
+            return true;
+        }
+
+        size_t begin = pos_;
+        if (pos_ + 2 <= text_.size() && text_[pos_] == '0' &&
+            (text_[pos_ + 1] == 'x' || text_[pos_ + 1] == 'X')) {
+            pos_ += 2;
+            begin = pos_;
+        }
+        while (pos_ < text_.size() &&
+               std::isxdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
+        if (pos_ == begin) return false;
+
+        const std::string token = text_.substr(begin, pos_ - begin);
+        char *end = nullptr;
+        const unsigned long long parsed = std::strtoull(token.c_str(), &end, 16);
+        if (!end || *end != '\0') return false;
+        value = parsed;
+        return true;
+    }
+
+    HANDLE process_ = nullptr;
+    DWORD pid_ = 0;
+    bool target64_ = false;
+    std::string text_;
+    size_t pos_ = 0;
+};
+
+bool ResolveAddressExprCompat(DmImpl *p, long hwnd_or_pid, PCSTR expr, LONGLONG &out) {
+    if (!p || !expr || !*expr) {
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    const DWORD pid = ResolvePid(p, hwnd_or_pid);
+    if (!pid) return false;
+
+    HANDLE process = ::OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!process) {
+        SetNativeError(p, static_cast<long>(::GetLastError()));
+        return false;
+    }
+
+    ULONGLONG value = 0;
+    AddressExprParserCompat parser(process, pid, ProcessIs64BitCompat(pid), expr);
+    const bool ok = parser.Parse(value);
+    if (!ok) SetNativeError(p, ERROR_INVALID_DATA);
+    else SetNativeError(p, 0);
+    ::CloseHandle(process);
+
+    if (!ok) return false;
+    out = static_cast<LONGLONG>(value);
+    return true;
+}
+
+std::wstring AcpToWideCompat(PCSTR s) {
+    if (!s) return {};
+    const int n = ::MultiByteToWideChar(CP_ACP, 0, s, -1, nullptr, 0);
+    if (n <= 0) return {};
+    std::wstring out(static_cast<size_t>(n), L'\0');
+    if (::MultiByteToWideChar(CP_ACP, 0, s, -1, out.data(), n) <= 0) return {};
+    return out;
+}
+
+std::string WideToAcpCompat(const wchar_t *s, int chars = -1) {
+    if (!s) return {};
+    const int n = ::WideCharToMultiByte(CP_ACP, 0, s, chars, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    if (::WideCharToMultiByte(CP_ACP, 0, s, chars, out.data(), n, nullptr, nullptr) <= 0) return {};
+    if (chars == -1 && !out.empty() && out.back() == '\0') out.pop_back();
+    return out;
+}
+
+std::string Utf8ToAcpCompat(const std::string &utf8) {
+    if (utf8.empty()) return {};
+    const int wn = ::MultiByteToWideChar(
+        CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (wn <= 0) return {};
+    std::wstring wide(static_cast<size_t>(wn), L'\0');
+    if (::MultiByteToWideChar(
+            CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
+            wide.data(), wn) <= 0) return {};
+    return WideToAcpCompat(wide.data(), static_cast<int>(wide.size()));
+}
+
+std::string AcpToUtf8Compat(PCSTR s) {
+    const std::wstring wide = AcpToWideCompat(s);
+    if (wide.empty()) return {};
+    const int chars = wide.back() == L'\0' ? static_cast<int>(wide.size() - 1)
+                                            : static_cast<int>(wide.size());
+    const int n = ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), chars, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), chars, out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+bool ReadRemoteBytesCompat(
+    DmImpl *p, long hwnd_or_pid, LONGLONG address, void *dst, SIZE_T size) {
+    if (!p || (!dst && size)) return false;
+    HANDLE process = OpenTarget(p, hwnd_or_pid, PROCESS_VM_READ | PROCESS_QUERY_INFORMATION);
+    if (!process) return false;
+    SIZE_T got = 0;
+    const BOOL ok = ::ReadProcessMemory(
+        process,
+        reinterpret_cast<LPCVOID>(static_cast<ULONG_PTR>(address)),
+        dst, size, &got);
+    if (!ok || got != size) SetNativeError(p, static_cast<long>(::GetLastError()));
+    else SetNativeError(p, 0);
+    ::CloseHandle(process);
+    return ok && got == size;
+}
+
+bool WriteRemoteBytesCompat(
+    DmImpl *p, long hwnd_or_pid, LONGLONG address, const void *src, SIZE_T size) {
+    if (!p || (!src && size)) return false;
+    HANDLE process = OpenTarget(
+        p, hwnd_or_pid, PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION);
+    if (!process) return false;
+    SIZE_T put = 0;
+    const BOOL ok = ::WriteProcessMemory(
+        process,
+        reinterpret_cast<LPVOID>(static_cast<ULONG_PTR>(address)),
+        src, size, &put);
+    if (!ok || put != size) SetNativeError(p, static_cast<long>(::GetLastError()));
+    else SetNativeError(p, 0);
+    ::CloseHandle(process);
+    return ok && put == size;
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -1617,6 +1844,155 @@ long dmsoft::SetShowErrorMsg(long show) {
     if (!p) return 0;
     p->show_error_msg = show != 0;
     return 1;
+}
+
+
+const char *dmsoft::ReadStringAddr(long hwnd, LONGLONG addr, long type, long len) {
+    auto *p = P(impl);
+    if (!p || len < 0 || type < 0 || type > 2) return "";
+
+    std::vector<unsigned char> bytes;
+    if (len > 0) {
+        bytes.resize(static_cast<size_t>(len));
+        if (!ReadRemoteBytesCompat(p, hwnd, addr, bytes.data(), bytes.size())) {
+            p->scratch.clear();
+            return p->scratch.c_str();
+        }
+    } else if (type == 1) {
+        constexpr size_t kMaxChars = 1024 * 1024 / sizeof(wchar_t);
+        for (size_t i = 0; i < kMaxChars; ++i) {
+            wchar_t ch = 0;
+            if (!ReadRemoteBytesCompat(
+                    p, hwnd, addr + static_cast<LONGLONG>(i * sizeof(wchar_t)),
+                    &ch, sizeof(ch))) {
+                p->scratch.clear();
+                return p->scratch.c_str();
+            }
+            if (ch == L'\0') break;
+            const auto *raw = reinterpret_cast<const unsigned char *>(&ch);
+            bytes.insert(bytes.end(), raw, raw + sizeof(ch));
+        }
+    } else {
+        constexpr size_t kMaxBytes = 1024 * 1024;
+        for (size_t i = 0; i < kMaxBytes; ++i) {
+            unsigned char ch = 0;
+            if (!ReadRemoteBytesCompat(p, hwnd, addr + static_cast<LONGLONG>(i), &ch, 1)) {
+                p->scratch.clear();
+                return p->scratch.c_str();
+            }
+            if (ch == 0) break;
+            bytes.push_back(ch);
+        }
+    }
+
+    if (type == 0) {
+        auto it = std::find(bytes.begin(), bytes.end(), 0);
+        p->scratch.assign(bytes.begin(), it);
+        return p->scratch.c_str();
+    }
+
+    if (type == 1) {
+        const size_t wchar_count = bytes.size() / sizeof(wchar_t);
+        std::wstring wide(wchar_count, L'\0');
+        if (!wide.empty()) std::memcpy(wide.data(), bytes.data(), wchar_count * sizeof(wchar_t));
+        const auto nul = std::find(wide.begin(), wide.end(), L'\0');
+        wide.erase(nul, wide.end());
+        p->scratch = WideToAcpCompat(wide.data(), static_cast<int>(wide.size()));
+        return p->scratch.c_str();
+    }
+
+    auto it = std::find(bytes.begin(), bytes.end(), 0);
+    const std::string utf8(bytes.begin(), it);
+    p->scratch = Utf8ToAcpCompat(utf8);
+    return p->scratch.c_str();
+}
+
+long dmsoft::WriteStringAddr(long hwnd, LONGLONG addr, long type, PCSTR v) {
+    auto *p = P(impl);
+    if (!p || !v || type < 0 || type > 2) return 0;
+
+    if (type == 0) {
+        const size_t n = std::strlen(v) + 1;
+        return WriteRemoteBytesCompat(p, hwnd, addr, v, n) ? 1 : 0;
+    }
+    if (type == 1) {
+        const std::wstring wide = AcpToWideCompat(v);
+        if (wide.empty() && *v) return 0;
+        return WriteRemoteBytesCompat(
+            p, hwnd, addr, wide.data(), wide.size() * sizeof(wchar_t)) ? 1 : 0;
+    }
+
+    std::string utf8 = AcpToUtf8Compat(v);
+    utf8.push_back('\0');
+    return WriteRemoteBytesCompat(p, hwnd, addr, utf8.data(), utf8.size()) ? 1 : 0;
+}
+
+LONGLONG dmsoft::ReadInt(long hwnd, PCSTR addr, long type) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0;
+    return ReadIntAddr(hwnd, resolved, type);
+}
+
+long dmsoft::WriteInt(long hwnd, PCSTR addr, long type, LONGLONG v) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0;
+    return WriteIntAddr(hwnd, resolved, type, v);
+}
+
+float dmsoft::ReadFloat(long hwnd, PCSTR addr) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0.0f;
+    return ReadFloatAddr(hwnd, resolved);
+}
+
+long dmsoft::WriteFloat(long hwnd, PCSTR addr, float float_value) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0;
+    return WriteFloatAddr(hwnd, resolved, float_value);
+}
+
+double dmsoft::ReadDouble(long hwnd, PCSTR addr) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0.0;
+    return ReadDoubleAddr(hwnd, resolved);
+}
+
+long dmsoft::WriteDouble(long hwnd, PCSTR addr, double double_value) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0;
+    return WriteDoubleAddr(hwnd, resolved, double_value);
+}
+
+const char *dmsoft::ReadData(long hwnd, PCSTR addr, long len) {
+    LONGLONG resolved = 0;
+    auto *p = P(impl);
+    if (!ResolveAddressExprCompat(p, hwnd, addr, resolved)) {
+        if (p) p->scratch.clear();
+        return p ? p->scratch.c_str() : "";
+    }
+    return ReadDataAddr(hwnd, resolved, len);
+}
+
+long dmsoft::WriteData(long hwnd, PCSTR addr, PCSTR data) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0;
+    return WriteDataAddr(hwnd, resolved, data);
+}
+
+const char *dmsoft::ReadString(long hwnd, PCSTR addr, long type, long len) {
+    LONGLONG resolved = 0;
+    auto *p = P(impl);
+    if (!ResolveAddressExprCompat(p, hwnd, addr, resolved)) {
+        if (p) p->scratch.clear();
+        return p ? p->scratch.c_str() : "";
+    }
+    return ReadStringAddr(hwnd, resolved, type, len);
+}
+
+long dmsoft::WriteString(long hwnd, PCSTR addr, long type, PCSTR v) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved)) return 0;
+    return WriteStringAddr(hwnd, resolved, type, v);
 }
 
 #include "legacy_dm_generated.inc"
