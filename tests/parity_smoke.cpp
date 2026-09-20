@@ -1652,6 +1652,45 @@ void test_encoded_capture(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     std::filesystem::remove_all(root, ec);
 }
 
+
+void test_ocr_state(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    eq_num("GetNowDict-default", old_dm.GetNowDict(), new_dm.GetNowDict());
+
+    for (long index : {-1L, 0L, 1L, 42L, 99L, 100L}) {
+        const long old_ret = old_dm.UseDict(index);
+        const long new_ret = new_dm.UseDict(index);
+        eq_num(("UseDict-ret-" + std::to_string(index)).c_str(), old_ret, new_ret);
+        eq_num(("UseDict-state-" + std::to_string(index)).c_str(),
+               old_dm.GetNowDict(), new_dm.GetNowDict());
+    }
+
+    for (long en : {-1L, 0L, 1L, 2L}) {
+        eq_num(("EnableShareDict-" + std::to_string(en)).c_str(),
+               old_dm.EnableShareDict(en), new_dm.EnableShareDict(en));
+        eq_num(("SetExactOcr-" + std::to_string(en)).c_str(),
+               old_dm.SetExactOcr(en), new_dm.SetExactOcr(en));
+    }
+
+    for (long v : {-1L, 0L, 1L, 5L, 10L, 100L}) {
+        eq_num(("SetMinRowGap-" + std::to_string(v)).c_str(),
+               old_dm.SetMinRowGap(v), new_dm.SetMinRowGap(v));
+        eq_num(("SetMinColGap-" + std::to_string(v)).c_str(),
+               old_dm.SetMinColGap(v), new_dm.SetMinColGap(v));
+        eq_num(("SetWordGap-" + std::to_string(v)).c_str(),
+               old_dm.SetWordGap(v), new_dm.SetWordGap(v));
+        eq_num(("SetWordLineHeight-" + std::to_string(v)).c_str(),
+               old_dm.SetWordLineHeight(v), new_dm.SetWordLineHeight(v));
+        eq_num(("SetRowGapNoDict-" + std::to_string(v)).c_str(),
+               old_dm.SetRowGapNoDict(v), new_dm.SetRowGapNoDict(v));
+        eq_num(("SetColGapNoDict-" + std::to_string(v)).c_str(),
+               old_dm.SetColGapNoDict(v), new_dm.SetColGapNoDict(v));
+        eq_num(("SetWordGapNoDict-" + std::to_string(v)).c_str(),
+               old_dm.SetWordGapNoDict(v), new_dm.SetWordGapNoDict(v));
+        eq_num(("SetWordLineHeightNoDict-" + std::to_string(v)).c_str(),
+               old_dm.SetWordLineHeightNoDict(v), new_dm.SetWordLineHeightNoDict(v));
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1677,6 +1716,7 @@ int main(int argc, char **argv) {
         test_position_algorithms(old_dm, new_dm);
         test_picture_cache_and_find(old_dm, new_dm);
         test_encoded_capture(old_dm, new_dm);
+        test_ocr_state(old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_audio_aero(old_dm, new_dm);
