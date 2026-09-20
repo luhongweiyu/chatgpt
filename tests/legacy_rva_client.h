@@ -94,6 +94,16 @@ public:
     const char *GetWindowProcessPath(long hwnd) { using F=PCSTR(WINAPI*)(long,long); return at<F>(126480)(obj_,hwnd); }
     const char *GetRealPath(PCSTR path) { using F=PCSTR(WINAPI*)(long,PCSTR); return at<F>(108208)(obj_,path); }
 
+    const char *Md5(PCSTR str) { using F=PCSTR(WINAPI*)(long,PCSTR); return at<F>(103168)(obj_,str); }
+    long GetResultCount(PCSTR str) { using F=long(WINAPI*)(long,PCSTR); return at<F>(116496)(obj_,str); }
+    long GetResultPos(PCSTR str,long index,long *x,long *y) { using F=long(WINAPI*)(long,PCSTR,long,long*,long*); return at<F>(122784)(obj_,str,index,x,y); }
+    const char *IntToData(LONGLONG v,long type) { using F=PCSTR(WINAPI*)(long,LONGLONG,long); return at<F>(101968)(obj_,v,type); }
+    const char *FloatToData(float v) { using F=PCSTR(WINAPI*)(long,float); return at<F>(122848)(obj_,v); }
+    const char *DoubleToData(double v) { using F=PCSTR(WINAPI*)(long,double); return at<F>(108144)(obj_,v); }
+    const char *StringToData(PCSTR v,long type) { using F=PCSTR(WINAPI*)(long,PCSTR,long); return at<F>(111008)(obj_,v,type); }
+    long GetLocale() { using F=long(WINAPI*)(long); return at<F>(104336)(obj_); }
+    long CheckUAC() { using F=long(WINAPI*)(long); return at<F>(113680)(obj_); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
