@@ -33,6 +33,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <memory>
+#include <optional>
 #include <limits>
 #include <random>
 #include <sstream>
@@ -2091,6 +2092,346 @@ bool IntelVtEnabledCompat() {
 #define PF_VIRT_FIRMWARE_ENABLED 21
 #endif
     return ::IsProcessorFeaturePresent(PF_VIRT_FIRMWARE_ENABLED) != FALSE;
+}
+
+
+struct PicRefCompat {
+    std::string display;
+    std::filesystem::path path;
+};
+
+struct PicDeltaCompat {
+    unsigned char r = 0;
+    unsigned char g = 0;
+    unsigned char b = 0;
+};
+
+bool ParsePicDeltaCompat(PCSTR text, PicDeltaCompat &out) {
+    out = {};
+    if (!text || !*text) return true;
+    const std::string s(text);
+    if (s.size() == 2) {
+        unsigned char v = 0;
+        if (!ParseHexByteCompat(s, 0, v)) return false;
+        out.r = out.g = out.b = v;
+        return true;
+    }
+    if (s.size() != 6) return false;
+    return ParseHexByteCompat(s, 0, out.r) &&
+           ParseHexByteCompat(s, 2, out.g) &&
+           ParseHexByteCompat(s, 4, out.b);
+}
+
+bool HasWildcardCompat(const std::string &s) {
+    return s.find('*') != std::string::npos ||
+           s.find('?') != std::string::npos;
+}
+
+std::string LowerPathKeyCompat(const std::filesystem::path &path) {
+    std::error_code ec;
+    auto p = std::filesystem::absolute(path, ec);
+    if (ec) p = path;
+    std::string key = p.lexically_normal().string();
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return key;
+}
+
+std::vector<PicRefCompat> ExpandPicRefsCompat(DmImpl *p, PCSTR pic_name) {
+    std::vector<PicRefCompat> out;
+    if (!pic_name || !*pic_name) return out;
+
+    for (const auto &token : SplitCompat(pic_name, '|')) {
+        if (token.empty()) continue;
+
+        std::filesystem::path raw(token);
+        std::filesystem::path full =
+            raw.is_absolute() ? raw : ResolveObjectFilePathCompat(p, token.c_str());
+
+        if (!HasWildcardCompat(token)) {
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(full, ec) && !ec)
+                out.push_back({token, full});
+            continue;
+        }
+
+        const std::filesystem::path dir =
+            full.has_parent_path() ? full.parent_path() : std::filesystem::path(".");
+        const std::string pattern = full.filename().string();
+        const std::filesystem::path query = dir / pattern;
+
+        WIN32_FIND_DATAA fd{};
+        HANDLE h = ::FindFirstFileA(query.string().c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            const std::filesystem::path found = dir / fd.cFileName;
+            out.push_back({fd.cFileName, found});
+        } while (::FindNextFileA(h, &fd));
+        ::FindClose(h);
+    }
+    return out;
+}
+
+bool LoadBmp24Compat(
+    const std::filesystem::path &path,
+    ScreenImageCompat &out) {
+    out = {};
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+
+    BITMAPFILEHEADER fh{};
+    BITMAPINFOHEADER ih{};
+    in.read(reinterpret_cast<char *>(&fh), sizeof(fh));
+    in.read(reinterpret_cast<char *>(&ih), sizeof(ih));
+    if (!in || fh.bfType != 0x4D42 ||
+        ih.biSize < sizeof(BITMAPINFOHEADER) ||
+        ih.biPlanes != 1 ||
+        ih.biBitCount != 24 ||
+        ih.biCompression != BI_RGB ||
+        ih.biWidth <= 0 ||
+        ih.biHeight == 0)
+        return false;
+
+    const long width = ih.biWidth;
+    const long height = ih.biHeight < 0 ? -ih.biHeight : ih.biHeight;
+    if (width <= 0 || height <= 0 ||
+        static_cast<unsigned long long>(width) *
+            static_cast<unsigned long long>(height) >
+        256ULL * 1024ULL * 1024ULL)
+        return false;
+
+    const size_t row_bytes =
+        ((static_cast<size_t>(width) * 3u + 3u) / 4u) * 4u;
+    std::vector<unsigned char> row(row_bytes);
+
+    out.x = 0;
+    out.y = 0;
+    out.width = width;
+    out.height = height;
+    out.pixels.resize(
+        static_cast<size_t>(width) * static_cast<size_t>(height));
+
+    in.seekg(static_cast<std::streamoff>(fh.bfOffBits), std::ios::beg);
+    if (!in) return false;
+
+    const bool top_down = ih.biHeight < 0;
+    for (long file_y = 0; file_y < height; ++file_y) {
+        in.read(reinterpret_cast<char *>(row.data()), row.size());
+        if (!in) return false;
+        const long y = top_down ? file_y : (height - 1 - file_y);
+        for (long x = 0; x < width; ++x) {
+            auto &dst = out.pixels[
+                static_cast<size_t>(y) * static_cast<size_t>(width) +
+                static_cast<size_t>(x)];
+            dst.b = row[static_cast<size_t>(x) * 3 + 0];
+            dst.g = row[static_cast<size_t>(x) * 3 + 1];
+            dst.r = row[static_cast<size_t>(x) * 3 + 2];
+        }
+    }
+    return true;
+}
+
+std::shared_ptr<ScreenImageCompat> LoadPicCachedCompat(
+    DmImpl *p, const std::filesystem::path &path) {
+    if (!p) return {};
+    const std::string key = LowerPathKeyCompat(path);
+
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        if (p->pic_cache_enabled) {
+            const auto it = p->pic_cache.find(key);
+            if (it != p->pic_cache.end()) return it->second;
+        }
+    }
+
+    auto image = std::make_shared<ScreenImageCompat>();
+    if (!LoadBmp24Compat(path, *image)) return {};
+
+    if (p->pic_cache_enabled) {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        p->pic_cache[key] = image;
+    }
+    return image;
+}
+
+bool SameRgbCompat(
+    const RgbColorCompat &a, const RgbColorCompat &b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+bool PicTransparentColorCompat(
+    const ScreenImageCompat &pic, RgbColorCompat &transparent) {
+    if (pic.width <= 0 || pic.height <= 0 || pic.pixels.empty()) return false;
+    const auto &a = pic.pixels.front();
+    const auto &b = pic.pixels[static_cast<size_t>(pic.width - 1)];
+    const auto &c = pic.pixels[
+        static_cast<size_t>(pic.height - 1) * static_cast<size_t>(pic.width)];
+    const auto &d = pic.pixels.back();
+    if (!SameRgbCompat(a, b) || !SameRgbCompat(a, c) || !SameRgbCompat(a, d))
+        return false;
+    transparent = a;
+    return true;
+}
+
+bool PicPixelWithinDeltaCompat(
+    const RgbColorCompat &actual,
+    const RgbColorCompat &expected,
+    const PicDeltaCompat &delta) {
+    return std::abs(static_cast<int>(actual.r) - static_cast<int>(expected.r)) <= delta.r &&
+           std::abs(static_cast<int>(actual.g) - static_cast<int>(expected.g)) <= delta.g &&
+           std::abs(static_cast<int>(actual.b) - static_cast<int>(expected.b)) <= delta.b;
+}
+
+int PicMatchPercentCompat(
+    const ScreenImageCompat &screen,
+    long x,
+    long y,
+    const ScreenImageCompat &pic,
+    const PicDeltaCompat &delta) {
+    if (pic.width <= 0 || pic.height <= 0) return -1;
+    if (x < screen.x || y < screen.y ||
+        x + pic.width - 1 >= screen.x + screen.width ||
+        y + pic.height - 1 >= screen.y + screen.height)
+        return -1;
+
+    RgbColorCompat transparent{};
+    const bool has_transparent =
+        PicTransparentColorCompat(pic, transparent);
+
+    unsigned long long matched = 0;
+    const unsigned long long total =
+        static_cast<unsigned long long>(pic.width) *
+        static_cast<unsigned long long>(pic.height);
+    if (!total) return -1;
+
+    for (long py = 0; py < pic.height; ++py) {
+        for (long px = 0; px < pic.width; ++px) {
+            const auto &expected = pic.pixels[
+                static_cast<size_t>(py) * static_cast<size_t>(pic.width) +
+                static_cast<size_t>(px)];
+            if (has_transparent && SameRgbCompat(expected, transparent)) {
+                ++matched;
+                continue;
+            }
+            const auto *actual = screen.At(x + px, y + py);
+            if (actual && PicPixelWithinDeltaCompat(*actual, expected, delta))
+                ++matched;
+        }
+    }
+    return static_cast<int>((matched * 100ULL) / total);
+}
+
+struct PicSearchResultCompat {
+    long index = -1;
+    long x = -1;
+    long y = -1;
+    long score = -1;
+    std::string display;
+};
+
+bool FindOnePicCompat(
+    const ScreenImageCompat &screen,
+    const ScreenImageCompat &pic,
+    const PicDeltaCompat &delta,
+    long x1, long y1, long x2, long y2,
+    long dir, long minimum_percent,
+    long &out_x, long &out_y, long &out_score) {
+    out_x = -1;
+    out_y = -1;
+    out_score = -1;
+    const long max_x = x2 - pic.width + 1;
+    const long max_y = y2 - pic.height + 1;
+    if (max_x < x1 || max_y < y1) return false;
+
+    bool found = false;
+    ForEachPointInDirectionCompat(
+        x1, y1, max_x, max_y, dir,
+        [&](long x, long y) {
+            const int score =
+                PicMatchPercentCompat(screen, x, y, pic, delta);
+            if (score >= minimum_percent) {
+                out_x = x;
+                out_y = y;
+                out_score = score;
+                found = true;
+                return true;
+            }
+            return false;
+        });
+    return found;
+}
+
+std::vector<PicSearchResultCompat> FindPicsAllCompat(
+    DmImpl *p,
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    long minimum_percent, long dir,
+    size_t limit) {
+    std::vector<PicSearchResultCompat> out;
+    if (!p || x2 < x1 || y2 < y1 || minimum_percent < 0 || minimum_percent > 100)
+        return out;
+
+    PicDeltaCompat delta{};
+    if (!ParsePicDeltaCompat(delta_color, delta)) return out;
+
+    const auto refs = ExpandPicRefsCompat(p, pic_name);
+    if (refs.empty()) return out;
+
+    ScreenImageCompat screen;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, screen)) return out;
+
+    struct Loaded {
+        PicRefCompat ref;
+        std::shared_ptr<ScreenImageCompat> image;
+        long index = -1;
+    };
+    std::vector<Loaded> loaded;
+    for (size_t i = 0; i < refs.size(); ++i) {
+        auto image = LoadPicCachedCompat(p, refs[i].path);
+        if (image)
+            loaded.push_back({refs[i], std::move(image), static_cast<long>(i)});
+    }
+
+    if (loaded.empty()) return out;
+
+    long max_w = 0, max_h = 0;
+    for (const auto &item : loaded) {
+        max_w = std::max(max_w, item.image->width);
+        max_h = std::max(max_h, item.image->height);
+    }
+
+    ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir,
+        [&](long x, long y) {
+            for (const auto &item : loaded) {
+                if (x + item.image->width - 1 > x2 ||
+                    y + item.image->height - 1 > y2)
+                    continue;
+                const int score =
+                    PicMatchPercentCompat(screen, x, y, *item.image, delta);
+                if (score < minimum_percent) continue;
+                out.push_back({
+                    item.index, x, y, score, item.ref.display
+                });
+                if (out.size() >= limit) return true;
+            }
+            return false;
+        });
+    return out;
+}
+
+std::optional<PicSearchResultCompat> FindPicFirstCompat(
+    DmImpl *p,
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    long minimum_percent, long dir) {
+    const auto all = FindPicsAllCompat(
+        p, x1, y1, x2, y2, pic_name, delta_color,
+        minimum_percent, dir, 1);
+    if (all.empty()) return std::nullopt;
+    return all.front();
 }
 
 } // namespace
