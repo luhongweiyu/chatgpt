@@ -197,6 +197,18 @@ public:
     const char *GetDiskSerial(long index) { using F=PCSTR(WINAPI*)(long,long); return at<F>(101376)(obj_,index); }
     const char *GetDisplayInfo() { using F=PCSTR(WINAPI*)(long); return at<F>(113968)(obj_); }
 
+    long EnableGetColorByCapture(long enable) { using F=long(WINAPI*)(long,long); return at<F>(109584)(obj_,enable); }
+    const char *GetColor(long x,long y) { using F=PCSTR(WINAPI*)(long,long,long); return at<F>(112784)(obj_,x,y); }
+    const char *GetColorBGR(long x,long y) { using F=PCSTR(WINAPI*)(long,long,long); return at<F>(122464)(obj_,x,y); }
+    const char *GetColorHSV(long x,long y) { using F=PCSTR(WINAPI*)(long,long,long); return at<F>(105600)(obj_,x,y); }
+    const char *GetAveRGB(long x1,long y1,long x2,long y2) { using F=PCSTR(WINAPI*)(long,long,long,long,long); return at<F>(126016)(obj_,x1,y1,x2,y2); }
+    const char *GetAveHSV(long x1,long y1,long x2,long y2) { using F=PCSTR(WINAPI*)(long,long,long,long,long); return at<F>(113344)(obj_,x1,y1,x2,y2); }
+    long CmpColor(long x,long y,PCSTR color,double sim) { using F=long(WINAPI*)(long,long,long,PCSTR,double); return at<F>(120256)(obj_,x,y,color,sim); }
+    long GetColorNum(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(105296)(obj_,x1,y1,x2,y2,color,sim); }
+    long FindColor(long x1,long y1,long x2,long y2,PCSTR color,double sim,long dir,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,double,long,long*,long*); return at<F>(115584)(obj_,x1,y1,x2,y2,color,sim,dir,x,y); }
+    const char *FindColorE(long x1,long y1,long x2,long y2,PCSTR color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long); return at<F>(121088)(obj_,x1,y1,x2,y2,color,sim,dir); }
+    const char *FindColorEx(long x1,long y1,long x2,long y2,PCSTR color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long); return at<F>(114304)(obj_,x1,y1,x2,y2,color,sim,dir); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
