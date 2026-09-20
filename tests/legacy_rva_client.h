@@ -3,6 +3,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 
