@@ -63,6 +63,6 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
-    target_link_libraries(hcbyj_parity PRIVATE hcbyj64)
+    target_link_libraries(hcbyj_parity PRIVATE hcbyj64 Dwmapi)
     target_compile_features(hcbyj_parity PRIVATE cxx_std_17)
 endif()
