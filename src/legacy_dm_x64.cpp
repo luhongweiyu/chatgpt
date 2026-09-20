@@ -17,6 +17,7 @@
 #include <winioctl.h>
 #include <mmsystem.h>
 #include <dwmapi.h>
+#include <gdiplus.h>
 #include <intrin.h>
 
 #include <algorithm>
@@ -2432,6 +2433,177 @@ std::optional<PicSearchResultCompat> FindPicFirstCompat(
         minimum_percent, dir, 1);
     if (all.empty()) return std::nullopt;
     return all.front();
+}
+
+
+class GdiplusSessionCompat {
+public:
+    GdiplusSessionCompat() {
+        Gdiplus::GdiplusStartupInput input;
+        ok_ = Gdiplus::GdiplusStartup(&token_, &input, nullptr) == Gdiplus::Ok;
+    }
+    ~GdiplusSessionCompat() {
+        if (ok_) Gdiplus::GdiplusShutdown(token_);
+    }
+    bool ok() const { return ok_; }
+
+private:
+    ULONG_PTR token_ = 0;
+    bool ok_ = false;
+};
+
+GdiplusSessionCompat &GdiplusSessionInstanceCompat() {
+    static GdiplusSessionCompat session;
+    return session;
+}
+
+bool GetImageEncoderClsidCompat(
+    const WCHAR *mime,
+    CLSID &clsid) {
+    UINT count = 0;
+    UINT bytes = 0;
+    if (Gdiplus::GetImageEncodersSize(&count, &bytes) != Gdiplus::Ok ||
+        count == 0 || bytes == 0)
+        return false;
+
+    std::vector<unsigned char> buffer(bytes);
+    auto *encoders =
+        reinterpret_cast<Gdiplus::ImageCodecInfo *>(buffer.data());
+    if (Gdiplus::GetImageEncoders(count, bytes, encoders) != Gdiplus::Ok)
+        return false;
+
+    for (UINT i = 0; i < count; ++i) {
+        if (encoders[i].MimeType &&
+            _wcsicmp(encoders[i].MimeType, mime) == 0) {
+            clsid = encoders[i].Clsid;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::unique_ptr<Gdiplus::Bitmap> ScreenImageToBitmapCompat(
+    const ScreenImageCompat &image) {
+    if (image.width <= 0 || image.height <= 0 || image.pixels.empty())
+        return {};
+
+    auto bitmap = std::make_unique<Gdiplus::Bitmap>(
+        image.width, image.height, PixelFormat24bppRGB);
+    if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok) return {};
+
+    Gdiplus::Rect rect(0, 0, image.width, image.height);
+    Gdiplus::BitmapData data{};
+    if (bitmap->LockBits(
+            &rect,
+            Gdiplus::ImageLockModeWrite,
+            PixelFormat24bppRGB,
+            &data) != Gdiplus::Ok)
+        return {};
+
+    auto *base = static_cast<unsigned char *>(data.Scan0);
+    for (long y = 0; y < image.height; ++y) {
+        auto *row =
+            base + static_cast<ptrdiff_t>(y) * data.Stride;
+        for (long x = 0; x < image.width; ++x) {
+            const auto &c = image.pixels[
+                static_cast<size_t>(y) *
+                    static_cast<size_t>(image.width) +
+                static_cast<size_t>(x)];
+            row[static_cast<size_t>(x) * 3 + 0] = c.b;
+            row[static_cast<size_t>(x) * 3 + 1] = c.g;
+            row[static_cast<size_t>(x) * 3 + 2] = c.r;
+        }
+    }
+    bitmap->UnlockBits(&data);
+    return bitmap;
+}
+
+bool SaveScreenImageEncodedCompat(
+    const std::filesystem::path &path,
+    const ScreenImageCompat &image,
+    const WCHAR *mime,
+    long quality) {
+    if (!GdiplusSessionInstanceCompat().ok()) return false;
+
+    auto bitmap = ScreenImageToBitmapCompat(image);
+    if (!bitmap) return false;
+
+    CLSID encoder{};
+    if (!GetImageEncoderClsidCompat(mime, encoder)) return false;
+
+    std::error_code ec;
+    if (path.has_parent_path())
+        std::filesystem::create_directories(path.parent_path(), ec);
+
+    Gdiplus::EncoderParameters params{};
+    Gdiplus::EncoderParameters *param_ptr = nullptr;
+    if (_wcsicmp(mime, L"image/jpeg") == 0) {
+        quality = std::clamp<long>(quality, 1, 100);
+        params.Count = 1;
+        params.Parameter[0].Guid = Gdiplus::EncoderQuality;
+        params.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+        params.Parameter[0].NumberOfValues = 1;
+        ULONG q = static_cast<ULONG>(quality);
+        params.Parameter[0].Value = &q;
+
+        std::wstring wide = path.wstring();
+        return bitmap->Save(
+                   wide.c_str(), &encoder, &params) == Gdiplus::Ok;
+    }
+
+    std::wstring wide = path.wstring();
+    return bitmap->Save(
+               wide.c_str(), &encoder, param_ptr) == Gdiplus::Ok;
+}
+
+bool ConvertImageToBmp24Compat(
+    const std::filesystem::path &source_path,
+    const std::filesystem::path &dest_path) {
+    if (!GdiplusSessionInstanceCompat().ok()) return false;
+
+    const std::wstring src = source_path.wstring();
+    Gdiplus::Bitmap source(src.c_str(), FALSE);
+    if (source.GetLastStatus() != Gdiplus::Ok ||
+        source.GetWidth() == 0 || source.GetHeight() == 0)
+        return false;
+
+    ScreenImageCompat converted{};
+    converted.width = static_cast<long>(source.GetWidth());
+    converted.height = static_cast<long>(source.GetHeight());
+    converted.x = converted.y = 0;
+    converted.pixels.resize(
+        static_cast<size_t>(converted.width) *
+        static_cast<size_t>(converted.height));
+
+    Gdiplus::Rect rect(
+        0, 0,
+        static_cast<INT>(source.GetWidth()),
+        static_cast<INT>(source.GetHeight()));
+    Gdiplus::BitmapData data{};
+    if (source.LockBits(
+            &rect,
+            Gdiplus::ImageLockModeRead,
+            PixelFormat24bppRGB,
+            &data) != Gdiplus::Ok)
+        return false;
+
+    const auto *base =
+        static_cast<const unsigned char *>(data.Scan0);
+    for (long y = 0; y < converted.height; ++y) {
+        const auto *row =
+            base + static_cast<ptrdiff_t>(y) * data.Stride;
+        for (long x = 0; x < converted.width; ++x) {
+            auto &c = converted.pixels[
+                static_cast<size_t>(y) *
+                    static_cast<size_t>(converted.width) +
+                static_cast<size_t>(x)];
+            c.b = row[static_cast<size_t>(x) * 3 + 0];
+            c.g = row[static_cast<size_t>(x) * 3 + 1];
+            c.r = row[static_cast<size_t>(x) * 3 + 2];
+        }
+    }
+    source.UnlockBits(&data);
+    return WriteBmp24Compat(dest_path, converted);
 }
 
 } // namespace
@@ -5159,6 +5331,43 @@ const char *dmsoft::FindPicSimEx(
     }
     p->scratch = oss.str();
     return p->scratch.c_str();
+}
+
+
+long dmsoft::CapturePng(
+    long x1, long y1, long x2, long y2, PCSTR file) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    const auto path = ResolveObjectFilePathCompat(p, file);
+    if (path.empty()) return 0;
+    return SaveScreenImageEncodedCompat(
+        path, image, L"image/png", 100) ? 1 : 0;
+}
+
+
+long dmsoft::CaptureJpg(
+    long x1, long y1, long x2, long y2,
+    PCSTR file, long quality) {
+    auto *p = P(impl);
+    if (!p || quality < 1 || quality > 100) return 0;
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    const auto path = ResolveObjectFilePathCompat(p, file);
+    if (path.empty()) return 0;
+    return SaveScreenImageEncodedCompat(
+        path, image, L"image/jpeg", quality) ? 1 : 0;
+}
+
+
+long dmsoft::ImageToBmp(PCSTR pic_name, PCSTR bmp_name) {
+    auto *p = P(impl);
+    if (!p || !pic_name || !bmp_name) return 0;
+    const auto source = ResolveObjectFilePathCompat(p, pic_name);
+    const auto dest = ResolveObjectFilePathCompat(p, bmp_name);
+    if (source.empty() || dest.empty()) return 0;
+    return ConvertImageToBmp24Compat(source, dest) ? 1 : 0;
 }
 
 #include "legacy_dm_generated.inc"
