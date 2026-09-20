@@ -195,6 +195,172 @@ void test_file_ini(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     std::filesystem::remove_all(root, ec);
 }
 
+
+void test_memory(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const long pid = static_cast<long>(::GetCurrentProcessId());
+    eq_num("SetMemoryHwndAsProcessId",
+           old_dm.SetMemoryHwndAsProcessId(1),
+           new_dm.SetMemoryHwndAsProcessId(1));
+
+    std::int32_t old_i = 0x12345678;
+    std::int32_t new_i = 0x12345678;
+    eq_num("ReadIntAddr",
+           old_dm.ReadIntAddr(pid, reinterpret_cast<LONGLONG>(&old_i), 0),
+           new_dm.ReadIntAddr(pid, reinterpret_cast<LONGLONG>(&new_i), 0));
+
+    const long old_wi = old_dm.WriteIntAddr(pid, reinterpret_cast<LONGLONG>(&old_i), 0, 0x13572468);
+    const long new_wi = new_dm.WriteIntAddr(pid, reinterpret_cast<LONGLONG>(&new_i), 0, 0x13572468);
+    eq_num("WriteIntAddr-ret", old_wi, new_wi);
+    eq_num("WriteIntAddr-value", old_i, new_i);
+
+    float old_f = 12.25f, new_f = 12.25f;
+    eq_num("ReadFloatAddr", old_dm.ReadFloatAddr(pid, reinterpret_cast<LONGLONG>(&old_f)),
+                            new_dm.ReadFloatAddr(pid, reinterpret_cast<LONGLONG>(&new_f)));
+    eq_num("WriteFloatAddr-ret",
+           old_dm.WriteFloatAddr(pid, reinterpret_cast<LONGLONG>(&old_f), -3.5f),
+           new_dm.WriteFloatAddr(pid, reinterpret_cast<LONGLONG>(&new_f), -3.5f));
+    eq_num("WriteFloatAddr-value", old_f, new_f);
+
+    double old_d = 1234.5, new_d = 1234.5;
+    eq_num("ReadDoubleAddr", old_dm.ReadDoubleAddr(pid, reinterpret_cast<LONGLONG>(&old_d)),
+                             new_dm.ReadDoubleAddr(pid, reinterpret_cast<LONGLONG>(&new_d)));
+    eq_num("WriteDoubleAddr-ret",
+           old_dm.WriteDoubleAddr(pid, reinterpret_cast<LONGLONG>(&old_d), -88.125),
+           new_dm.WriteDoubleAddr(pid, reinterpret_cast<LONGLONG>(&new_d), -88.125));
+    eq_num("WriteDoubleAddr-value", old_d, new_d);
+
+    unsigned char old_bytes[6] = {0x00,0x11,0x7f,0x80,0xfe,0xff};
+    unsigned char new_bytes[6] = {0x00,0x11,0x7f,0x80,0xfe,0xff};
+    {
+        const char *a = old_dm.ReadDataAddr(pid, reinterpret_cast<LONGLONG>(old_bytes), 6);
+        const char *b = new_dm.ReadDataAddr(pid, reinterpret_cast<LONGLONG>(new_bytes), 6);
+        eq_str("ReadDataAddr", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    eq_num("WriteDataAddr-ret",
+           old_dm.WriteDataAddr(pid, reinterpret_cast<LONGLONG>(old_bytes), "12 34 56 78 9a bc"),
+           new_dm.WriteDataAddr(pid, reinterpret_cast<LONGLONG>(new_bytes), "12 34 56 78 9a bc"));
+    eq_num("WriteDataAddr-bytes", std::memcmp(old_bytes, new_bytes, sizeof(old_bytes)), 0);
+
+    char exe[MAX_PATH]{};
+    ::GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    const char *base = std::strrchr(exe, '\\');
+    base = base ? base + 1 : exe;
+    eq_num("GetModuleBaseAddr", old_dm.GetModuleBaseAddr(pid, base), new_dm.GetModuleBaseAddr(pid, base));
+    eq_num("GetModuleSize", old_dm.GetModuleSize(pid, base), new_dm.GetModuleSize(pid, base));
+}
+
+LRESULT CALLBACK ParityWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    return ::DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+void test_window(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const char *cls = "hcbyj_parity_window";
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = ParityWndProc;
+    wc.hInstance = ::GetModuleHandleA(nullptr);
+    wc.lpszClassName = cls;
+    ::RegisterClassA(&wc);
+
+    HWND hwnd = ::CreateWindowExA(
+        0, cls, "parity-start", WS_OVERLAPPEDWINDOW,
+        40, 50, 420, 300, nullptr, nullptr, wc.hInstance, nullptr);
+    if (!hwnd) {
+        fail("CreateWindow", "success", "failed");
+        return;
+    }
+    const long h = static_cast<long>(reinterpret_cast<INT_PTR>(hwnd));
+
+    eq_num("GetWindowProcessId", old_dm.GetWindowProcessId(h), new_dm.GetWindowProcessId(h));
+    eq_num("GetWindowThreadId", old_dm.GetWindowThreadId(h), new_dm.GetWindowThreadId(h));
+
+    long ax1=0,ay1=0,ax2=0,ay2=0,bx1=0,by1=0,bx2=0,by2=0;
+    const long ar = old_dm.GetWindowRect(h,&ax1,&ay1,&ax2,&ay2);
+    const long br = new_dm.GetWindowRect(h,&bx1,&by1,&bx2,&by2);
+    eq_num("GetWindowRect-ret", ar, br);
+    eq_num("GetWindowRect-x1", ax1, bx1);
+    eq_num("GetWindowRect-y1", ay1, by1);
+    eq_num("GetWindowRect-x2", ax2, bx2);
+    eq_num("GetWindowRect-y2", ay2, by2);
+
+    ax1=ay1=ax2=ay2=bx1=by1=bx2=by2=0;
+    eq_num("GetClientRect-ret",
+           old_dm.GetClientRect(h,&ax1,&ay1,&ax2,&ay2),
+           new_dm.GetClientRect(h,&bx1,&by1,&bx2,&by2));
+    eq_num("GetClientRect-x1", ax1, bx1);
+    eq_num("GetClientRect-y1", ay1, by1);
+    eq_num("GetClientRect-x2", ax2, bx2);
+    eq_num("GetClientRect-y2", ay2, by2);
+
+    long aw=0,ah=0,bw=0,bh=0;
+    eq_num("GetClientSize-ret", old_dm.GetClientSize(h,&aw,&ah), new_dm.GetClientSize(h,&bw,&bh));
+    eq_num("GetClientSize-w", aw, bw);
+    eq_num("GetClientSize-h", ah, bh);
+
+    {
+        const char *a = old_dm.GetWindowTitle(h);
+        const char *b = new_dm.GetWindowTitle(h);
+        eq_str("GetWindowTitle", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.GetWindowClass(h);
+        const char *b = new_dm.GetWindowClass(h);
+        eq_str("GetWindowClass", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.GetWindowProcessPath(h);
+        const char *b = new_dm.GetWindowProcessPath(h);
+        eq_str("GetWindowProcessPath", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.GetRealPath(".");
+        const char *b = new_dm.GetRealPath(".");
+        eq_str("GetRealPath", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    long ax=7, ay=11, bx=7, by=11;
+    eq_num("ClientToScreen-ret", old_dm.ClientToScreen(h,&ax,&ay), new_dm.ClientToScreen(h,&bx,&by));
+    eq_num("ClientToScreen-x", ax, bx);
+    eq_num("ClientToScreen-y", ay, by);
+
+    eq_num("ScreenToClient-ret", old_dm.ScreenToClient(h,&ax,&ay), new_dm.ScreenToClient(h,&bx,&by));
+    eq_num("ScreenToClient-x", ax, bx);
+    eq_num("ScreenToClient-y", ay, by);
+
+    ::SetWindowTextA(hwnd, "parity-start");
+    const long old_text_ret = old_dm.SetWindowText(h, "parity-changed");
+    char old_title[128]{};
+    ::GetWindowTextA(hwnd, old_title, sizeof(old_title));
+    ::SetWindowTextA(hwnd, "parity-start");
+    const long new_text_ret = new_dm.SetWindowText(h, "parity-changed");
+    char new_title[128]{};
+    ::GetWindowTextA(hwnd, new_title, sizeof(new_title));
+    eq_num("SetWindowText-ret", old_text_ret, new_text_ret);
+    eq_str("SetWindowText-effect", old_title, new_title);
+
+    ::SetWindowPos(hwnd,nullptr,40,50,420,300,SWP_NOZORDER|SWP_NOACTIVATE);
+    const long old_size_ret = old_dm.SetWindowSize(h, 500, 360);
+    RECT old_wr{}; ::GetWindowRect(hwnd,&old_wr);
+    ::SetWindowPos(hwnd,nullptr,40,50,420,300,SWP_NOZORDER|SWP_NOACTIVATE);
+    const long new_size_ret = new_dm.SetWindowSize(h, 500, 360);
+    RECT new_wr{}; ::GetWindowRect(hwnd,&new_wr);
+    eq_num("SetWindowSize-ret", old_size_ret, new_size_ret);
+    eq_num("SetWindowSize-width", old_wr.right-old_wr.left, new_wr.right-new_wr.left);
+    eq_num("SetWindowSize-height", old_wr.bottom-old_wr.top, new_wr.bottom-new_wr.top);
+
+    ::SetWindowPos(hwnd,nullptr,40,50,420,300,SWP_NOZORDER|SWP_NOACTIVATE);
+    const long old_client_ret = old_dm.SetClientSize(h, 320, 200);
+    RECT old_cr{}; ::GetClientRect(hwnd,&old_cr);
+    ::SetWindowPos(hwnd,nullptr,40,50,420,300,SWP_NOZORDER|SWP_NOACTIVATE);
+    const long new_client_ret = new_dm.SetClientSize(h, 320, 200);
+    RECT new_cr{}; ::GetClientRect(hwnd,&new_cr);
+    eq_num("SetClientSize-ret", old_client_ret, new_client_ret);
+    eq_num("SetClientSize-width", old_cr.right-old_cr.left, new_cr.right-new_cr.left);
+    eq_num("SetClientSize-height", old_cr.bottom-old_cr.top, new_cr.bottom-new_cr.top);
+
+    ::DestroyWindow(hwnd);
+    ::UnregisterClassA(cls, wc.hInstance);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -213,6 +379,8 @@ int main(int argc, char **argv) {
         test_system(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
+        test_memory(old_dm, new_dm);
+        test_window(old_dm, new_dm);
 
         FreeDm();
 
