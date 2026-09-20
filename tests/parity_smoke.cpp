@@ -1767,6 +1767,180 @@ void test_system_paths_and_commandline(LegacyRvaClient &old_dm, dmsoft &new_dm) 
     }
 }
 
+
+void test_memory_search(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const long pid = static_cast<long>(::GetCurrentProcessId());
+    old_dm.SetMemoryHwndAsProcessId(1);
+    new_dm.SetMemoryHwndAsProcessId(1);
+
+    constexpr SIZE_T kSize = 0x10000;
+    auto *mem = static_cast<unsigned char *>(
+        ::VirtualAlloc(nullptr, kSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (!mem) {
+        fail("memory-search-alloc", "success", "failed");
+        return;
+    }
+    std::memset(mem, 0xCC, kSize);
+
+    auto range_string = [&](SIZE_T begin_off, SIZE_T end_off) {
+        char buf[96]{};
+        std::snprintf(
+            buf, sizeof(buf), "%llX-%llX",
+            static_cast<unsigned long long>(
+                reinterpret_cast<ULONG_PTR>(mem + begin_off)),
+            static_cast<unsigned long long>(
+                reinterpret_cast<ULONG_PTR>(mem + end_off)));
+        return std::string(buf);
+    };
+
+    const std::string whole = range_string(0, kSize - 1);
+
+    *reinterpret_cast<std::int32_t *>(mem + 0x100) = 0x12345678;
+    *reinterpret_cast<std::int32_t *>(mem + 0x240) = 0x12345678;
+    *reinterpret_cast<std::int32_t *>(mem + 0x381) = 0x12345678;
+
+    *reinterpret_cast<float *>(mem + 0x500) = 12345.75f;
+    *reinterpret_cast<float *>(mem + 0x620) = 12345.75f;
+
+    *reinterpret_cast<double *>(mem + 0x800) = 98765.125;
+    *reinterpret_cast<double *>(mem + 0x940) = 98765.125;
+
+    const unsigned char pattern1[] = {0x12,0x34,0x56,0x78,0x9A,0xBC};
+    const unsigned char pattern2[] = {0x12,0x34,0xA1,0xB2,0x9A,0xBC};
+    std::memcpy(mem + 0xB00, pattern1, sizeof(pattern1));
+    std::memcpy(mem + 0xC20, pattern2, sizeof(pattern2));
+
+    const char ascii_text[] = "HCByj-Memory-Unique-ASCII";
+    std::memcpy(mem + 0xD00, ascii_text, sizeof(ascii_text));
+
+    const wchar_t wide_text[] = L"HCByjWideUnique";
+    std::memcpy(mem + 0xE00, wide_text, sizeof(wide_text));
+
+    auto cmp_call = [&](const char *name, const char *a, const char *b) {
+        eq_str(name,
+               a ? std::string(a) : "<null>",
+               b ? std::string(b) : "<null>");
+    };
+
+    {
+        const char *a = old_dm.FindInt(pid, whole.c_str(), 0x12345678, 0x12345678, 0);
+        const std::string old_result = a ? a : "";
+        const char *b = new_dm.FindInt(pid, whole.c_str(), 0x12345678, 0x12345678, 0);
+        const std::string new_result = b ? b : "";
+        eq_str("FindInt", old_result, new_result);
+
+        const char *a2 = old_dm.FindInt(pid, old_result.c_str(), 0x12345678, 0x12345678, 0);
+        const char *b2 = new_dm.FindInt(pid, new_result.c_str(), 0x12345678, 0x12345678, 0);
+        cmp_call("FindInt-second-scan", a2, b2);
+    }
+
+    {
+        const char *a = old_dm.FindIntEx(
+            pid, whole.c_str(), 0x12345678, 0x12345678, 0, 4, 0, 1);
+        const char *b = new_dm.FindIntEx(
+            pid, whole.c_str(), 0x12345678, 0x12345678, 0, 4, 0, 1);
+        cmp_call("FindIntEx-step-mode", a, b);
+    }
+
+    {
+        const char *a = old_dm.FindFloat(
+            pid, whole.c_str(), 12345.75f, 12345.75f);
+        const char *b = new_dm.FindFloat(
+            pid, whole.c_str(), 12345.75f, 12345.75f);
+        cmp_call("FindFloat", a, b);
+
+        a = old_dm.FindFloatEx(
+            pid, whole.c_str(), 12345.74f, 12345.76f, 2, 0, 0);
+        b = new_dm.FindFloatEx(
+            pid, whole.c_str(), 12345.74f, 12345.76f, 2, 0, 0);
+        cmp_call("FindFloatEx", a, b);
+    }
+
+    {
+        const char *a = old_dm.FindDouble(
+            pid, whole.c_str(), 98765.125, 98765.125);
+        const char *b = new_dm.FindDouble(
+            pid, whole.c_str(), 98765.125, 98765.125);
+        cmp_call("FindDouble", a, b);
+
+        a = old_dm.FindDoubleEx(
+            pid, whole.c_str(), 98765.0, 98766.0, 8, 0, 16);
+        b = new_dm.FindDoubleEx(
+            pid, whole.c_str(), 98765.0, 98766.0, 8, 0, 16);
+        cmp_call("FindDoubleEx", a, b);
+    }
+
+    {
+        const char *a = old_dm.FindData(
+            pid, whole.c_str(), "12 34 ?? ?? 9A BC");
+        const char *b = new_dm.FindData(
+            pid, whole.c_str(), "12 34 ?? ?? 9A BC");
+        cmp_call("FindData-wildcard", a, b);
+
+        a = old_dm.FindDataEx(
+            pid, whole.c_str(), "12 34 56 78 9A BC", 2, 0, 0);
+        b = new_dm.FindDataEx(
+            pid, whole.c_str(), "12 34 56 78 9A BC", 2, 0, 0);
+        cmp_call("FindDataEx", a, b);
+    }
+
+    {
+        const char *a = old_dm.FindString(
+            pid, whole.c_str(), ascii_text, 0);
+        const char *b = new_dm.FindString(
+            pid, whole.c_str(), ascii_text, 0);
+        cmp_call("FindString-ascii", a, b);
+
+        a = old_dm.FindStringEx(
+            pid, whole.c_str(), "HCByjWideUnique", 1, 2, 0, 0);
+        b = new_dm.FindStringEx(
+            pid, whole.c_str(), "HCByjWideUnique", 1, 2, 0, 0);
+        cmp_call("FindStringEx-unicode", a, b);
+    }
+
+    {
+        const auto root = make_root();
+        const auto old_file = root / "old_memory_result.dat";
+        const auto new_file = root / "new_memory_result.dat";
+
+        eq_num("SetMemoryFindResultToFile-old-new",
+               old_dm.SetMemoryFindResultToFile(old_file.string().c_str()),
+               new_dm.SetMemoryFindResultToFile(new_file.string().c_str()));
+
+        const char *a = old_dm.FindInt(
+            pid, whole.c_str(), 0x12345678, 0x12345678, 0);
+        const std::string old_return = a ? a : "";
+        const char *b = new_dm.FindInt(
+            pid, whole.c_str(), 0x12345678, 0x12345678, 0);
+        const std::string new_return = b ? b : "";
+        eq_str("FindInt-result-file-return", old_return, new_return);
+
+        auto read_file = [](const std::filesystem::path &path) {
+            std::ifstream in(path, std::ios::binary);
+            return std::string(
+                std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>());
+        };
+        eq_str("FindInt-result-file-content",
+               read_file(old_file), read_file(new_file));
+
+        const char *a2 = old_dm.FindInt(
+            pid, "ignored-address-list", 0x12345678, 0x12345678, 0);
+        const char *b2 = new_dm.FindInt(
+            pid, "ignored-address-list", 0x12345678, 0x12345678, 0);
+        cmp_call("FindInt-result-file-second-scan", a2, b2);
+
+        eq_num("SetMemoryFindResultToFile-disable",
+               old_dm.SetMemoryFindResultToFile(""),
+               new_dm.SetMemoryFindResultToFile(""));
+
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+    }
+
+    ::VirtualFree(mem, 0, MEM_RELEASE);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1802,6 +1976,7 @@ int main(int argc, char **argv) {
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
         test_memory(old_dm, new_dm);
+        test_memory_search(old_dm, new_dm);
         test_window(old_dm, new_dm);
         test_color_core(old_dm, new_dm);
 
