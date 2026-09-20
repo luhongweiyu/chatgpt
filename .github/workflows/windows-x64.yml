@@ -1,4 +1,4 @@
-name: Windows x64 build
+name: Windows recovered build
 
 on:
   push:
@@ -9,30 +9,51 @@ on:
 jobs:
   build:
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: Win32
+            machine: 0x014c
+            dll: hcbyj32_recovered.dll
+            artifact: hcbyj32-recovered-release
+          - arch: x64
+            machine: 0x8664
+            dll: hcbyj64.dll
+            artifact: hcbyj64-release
+
     steps:
       - uses: actions/checkout@v4
-      - name: Configure x64
+
+      - name: Configure ${{ matrix.arch }}
         shell: pwsh
-        run: cmake -S . -B build -A x64
+        run: cmake -S . -B build -A ${{ matrix.arch }}
+
       - name: Audit 416 APIs
         shell: pwsh
         run: python tools/audit_api.py
+
       - name: Build Release
         shell: pwsh
         run: cmake --build build --config Release --parallel
+
       - name: Verify PE machine
         shell: pwsh
         run: |
-          $dll = Resolve-Path build/Release/hcbyj64.dll
+          $dll = Resolve-Path "build/Release/${{ matrix.dll }}"
           $bytes = [IO.File]::ReadAllBytes($dll)
           $pe = [BitConverter]::ToInt32($bytes, 0x3c)
           $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
-          if ($machine -ne 0x8664) { throw "hcbyj64.dll is not AMD64: 0x$($machine.ToString('X4'))" }
-          Write-Host "Verified AMD64 PE: $dll"
+          $expected = [Convert]::ToUInt16("${{ matrix.machine }}", 16)
+          if ($machine -ne $expected) {
+            throw "Unexpected PE machine: 0x$($machine.ToString('X4')); expected ${{ matrix.machine }}"
+          }
+          Write-Host "Verified ${{ matrix.arch }} PE: $dll"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: hcbyj64-x64-release
+          name: ${{ matrix.artifact }}
           path: |
-            build/Release/hcbyj64.dll
-            build/Release/hcbyj64.lib
+            build/Release/${{ matrix.dll }}
+            build/Release/*.lib
             build/Release/hcbyj64_smoke.exe
