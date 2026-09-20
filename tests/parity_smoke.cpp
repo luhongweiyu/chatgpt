@@ -100,6 +100,16 @@ void test_system(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("GetScreenDepth", old_dm.GetScreenDepth(), new_dm.GetScreenDepth());
     eq_num("GetDPI", old_dm.GetDPI(), new_dm.GetDPI());
     eq_num("GetOsBuildNumber", old_dm.GetOsBuildNumber(), new_dm.GetOsBuildNumber());
+
+    for (long type = -1; type <= 5; ++type) {
+        const char *a = old_dm.GetDir(type);
+        const char *b = new_dm.GetDir(type);
+        eq_str(("GetDir-type" + std::to_string(type)).c_str(),
+               a ? std::string(a) : "<null>",
+               b ? std::string(b) : "<null>");
+    }
+    eq_num("GetOsType", old_dm.GetOsType(), new_dm.GetOsType());
+
     eq_num("CheckFontSmooth", old_dm.CheckFontSmooth(), new_dm.CheckFontSmooth());
     eq_num("GetKeyState", old_dm.GetKeyState(VK_F24), new_dm.GetKeyState(VK_F24));
 
