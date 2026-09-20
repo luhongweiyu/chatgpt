@@ -43,6 +43,8 @@ using hcbyj64::A;
 
 namespace {
 
+struct ScreenImageCompat;
+
 struct DmImpl {
     hcbyj64::OpObject op;
     bool hwnd_is_pid = false;
@@ -67,6 +69,8 @@ struct DmImpl {
     bool get_color_by_capture = true;
     long next_play_id = 1;
     std::map<long, std::string> play_aliases;
+    bool pic_cache_enabled = true;
+    std::map<std::string, std::shared_ptr<ScreenImageCompat>> pic_cache;
 };
 
 
