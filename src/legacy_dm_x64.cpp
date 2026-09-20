@@ -81,6 +81,20 @@ struct DmImpl {
     bool find_pic_multithread_enabled = true;
     long find_pic_multithread_count = 4;
     long find_pic_multithread_limit = 0;
+
+    // OCR / dictionary state. Keep the legacy defaults so x86 parity can
+    // validate behavior before the recognition engine itself is migrated.
+    long current_dict = 0;
+    bool share_dict_enabled = false;
+    bool exact_ocr_enabled = false;
+    long min_row_gap = 0;
+    long min_col_gap = 0;
+    long word_gap = 5;
+    long word_line_height = 10;
+    long nodict_row_gap = 1;
+    long nodict_col_gap = 1;
+    long nodict_word_gap = 5;
+    long nodict_word_line_height = 10;
 };
 
 
@@ -5448,6 +5462,89 @@ long dmsoft::SetFindPicMultithreadLimit(long limit) {
     const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
     if (static_cast<unsigned long>(limit) > cores) return 0;
     p->find_pic_multithread_limit = limit;
+    return 1;
+}
+
+
+long dmsoft::UseDict(long index) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index > 99) return 0;
+    p->current_dict = index;
+    return 1;
+}
+
+long dmsoft::GetNowDict() {
+    auto *p = P(impl);
+    return p ? p->current_dict : 0;
+}
+
+long dmsoft::EnableShareDict(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    p->share_dict_enabled = en != 0;
+    return 1;
+}
+
+long dmsoft::SetExactOcr(long exact_ocr) {
+    auto *p = P(impl);
+    if (!p || (exact_ocr != 0 && exact_ocr != 1)) return 0;
+    p->exact_ocr_enabled = exact_ocr != 0;
+    return 1;
+}
+
+long dmsoft::SetMinRowGap(long row_gap) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->min_row_gap = row_gap;
+    return 1;
+}
+
+long dmsoft::SetMinColGap(long col_gap) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->min_col_gap = col_gap;
+    return 1;
+}
+
+long dmsoft::SetWordGap(long word_gap) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->word_gap = word_gap;
+    return 1;
+}
+
+long dmsoft::SetWordLineHeight(long line_height) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->word_line_height = line_height;
+    return 1;
+}
+
+long dmsoft::SetRowGapNoDict(long row_gap) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->nodict_row_gap = row_gap;
+    return 1;
+}
+
+long dmsoft::SetColGapNoDict(long col_gap) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->nodict_col_gap = col_gap;
+    return 1;
+}
+
+long dmsoft::SetWordGapNoDict(long word_gap) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->nodict_word_gap = word_gap;
+    return 1;
+}
+
+long dmsoft::SetWordLineHeightNoDict(long line_height) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->nodict_word_line_height = line_height;
     return 1;
 }
 
