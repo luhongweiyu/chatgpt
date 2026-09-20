@@ -4,9 +4,6 @@ project(hcbyj64 LANGUAGES CXX)
 if(NOT WIN32)
     message(FATAL_ERROR "hcbyj64 is a Windows-only project.")
 endif()
-if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "Build this project with an x64 generator/toolchain.")
-endif()
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -43,8 +40,14 @@ if(MSVC)
     set_property(TARGET hcbyj64 PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(HCBYJ_RECOVERED_OUTPUT "hcbyj64")
+else()
+    set(HCBYJ_RECOVERED_OUTPUT "hcbyj32_recovered")
+endif()
+
 set_target_properties(hcbyj64 PROPERTIES
-    OUTPUT_NAME "hcbyj64"
+    OUTPUT_NAME "${HCBYJ_RECOVERED_OUTPUT}"
 )
 
 add_executable(hcbyj64_smoke tests/smoke_test.cpp)
