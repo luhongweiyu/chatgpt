@@ -1,19 +1,35 @@
-# hcbyj64 recovery status
+# hcbyj source recovery status
 
-Goal: produce a real AMD64 replacement for the legacy x86 hcbyj DLL, preserving the dmsoft API surface while replacing x86 RVA trampolines with x64 implementations.
+## Acceptance criteria
 
-## Invariants
+The final replacement is accepted only when all of the following are true:
 
-- 416 legacy virtual methods are tracked.
-- Every declared method must have exactly one implementation.
-- No implementation may jump to the legacy x86 DLL by fixed RVA.
-- CI must build with the x64 toolchain and verify PE Machine == 0x8664.
-- Documented Win32/Win64 behavior is implemented natively where possible.
-- Image/OCR/input/binding functionality is being migrated to a pinned x64 C++ backend (WallBreaker2/op 0.4.8.3) and then behavior-tested.
-- Legacy custom subsystems (Asm/DmGuard/Faq/Foobar/registration) are not marked complete until their original behavior is recovered and tested.
+1. All 416 legacy `dmsoft` methods keep the same public name, parameter list/order/types and return type.
+2. Return values, output parameters, error values, state transitions and observable side effects match the original x86 DLL.
+3. Edge cases and invalid-input behavior are matched, not merely the common success path.
+4. Each implementation is first validated against the original x86 DLL in a Win32 differential test where practical.
+5. The validated source is then built from the same codebase as a native AMD64 DLL.
+6. The final product has no dependency on the old x86 `hcbyj.dll`, no 32-bit proxy process, and no runtime forwarding to OP/COM/tools.dll.
+7. The final wrapper-generator count must be **0**. A generated forwarding body is an unresolved method, not a recovered method.
 
-## Current native migration batch
+## Build state
 
-The current working tree has native Win64 implementations for memory/address primitives plus a new batch covering files/directories, ordinary INI access, object environment storage, screen/system metrics, memory/CPU usage, font smoothing, power-save inhibition, basic string/color conversion and OS build detection.
+- The public interface contains 416 unique legacy virtual methods.
+- CI builds the recovered source as both Win32 and x64.
+- CI checks PE machine type for both architectures.
+- A Win32 parity probe calls the original `hcbyj.dll` directly by the known RVA wrappers, so the original binary/source does not have to be committed to GitHub.
 
-This branch is a recovery work branch; main should only receive a merge when the compatibility test matrix is complete.
+## Recovery state terminology
+
+- **candidate**: a native C++ implementation exists but has not yet passed differential behavior tests.
+- **verified-x86**: candidate behavior has matched the original x86 DLL for the covered test matrix.
+- **verified-x64**: the same verified source builds/runs as x64 and passes architecture-specific tests.
+- **unresolved**: still represented by generated compatibility forwarding or not behavior-recovered.
+
+Compilation alone does not change a method from candidate/unresolved to verified.
+
+## Current work
+
+The current candidate set includes core process-memory primitives and several deterministic Windows/system/file/INI/window helpers. These are now being moved through the x86 differential harness before being treated as recovered.
+
+Custom subsystems such as Asm/AsmCall, DmGuard, Faq, Foobar, registration/licensing behavior, special bind/input modes and other legacy-specific behavior remain unresolved until their original behavior has been recovered and tested.
