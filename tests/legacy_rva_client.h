@@ -115,6 +115,12 @@ public:
     const char *EnumWindowByProcessId(long pid,PCSTR title,PCSTR class_name,long filter) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR,long); return at<F>(122400)(obj_,pid,title,class_name,filter); }
     const char *EnumWindowByProcess(PCSTR process_name,PCSTR title,PCSTR class_name,long filter) { using F=PCSTR(WINAPI*)(long,PCSTR,PCSTR,PCSTR,long); return at<F>(124816)(obj_,process_name,title,class_name,filter); }
 
+    long OpenProcess(long pid) { using F=long(WINAPI*)(long,long); return at<F>(108880)(obj_,pid); }
+    long TerminateProcess(long pid) { using F=long(WINAPI*)(long,long); return at<F>(106096)(obj_,pid); }
+    long FreeProcessMemory(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(106272)(obj_,hwnd); }
+    long VirtualProtectEx(long hwnd,LONGLONG addr,long size,long type,long old_protect) { using F=long(WINAPI*)(long,long,LONGLONG,long,long,long); return at<F>(120496)(obj_,hwnd,addr,size,type,old_protect); }
+    const char *VirtualQueryEx(long hwnd,LONGLONG addr,long pmbi) { using F=PCSTR(WINAPI*)(long,long,LONGLONG,long); return at<F>(110832)(obj_,hwnd,addr,pmbi); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
