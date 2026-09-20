@@ -51,7 +51,7 @@ generated: list[str] = [
 ]
 count = 0
 for m in decl_re.finditer(decl_text):
-    ret = " ".join(m.group("ret").split())
+    ret = " ".join(m.group("ret").split()).replace("char *", "char *")
     name = m.group("name")
     params = m.group("params").strip()
     if name in implemented:
