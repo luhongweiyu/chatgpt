@@ -178,6 +178,12 @@ public:
     long MoveR(long rx,long ry) { using F=long(WINAPI*)(long,long,long); return at<F>(116688)(obj_,rx,ry); }
     const char *MoveToEx(long x,long y,long w,long h) { using F=PCSTR(WINAPI*)(long,long,long,long,long); return at<F>(115328)(obj_,x,y,w,h); }
 
+    long KeyDownChar(PCSTR key_str) { using F=long(WINAPI*)(long,PCSTR); return at<F>(103328)(obj_,key_str); }
+    long KeyUpChar(PCSTR key_str) { using F=long(WINAPI*)(long,PCSTR); return at<F>(103776)(obj_,key_str); }
+    long KeyPressChar(PCSTR key_str) { using F=long(WINAPI*)(long,PCSTR); return at<F>(104064)(obj_,key_str); }
+    long KeyPressStr(PCSTR key_str,long delay) { using F=long(WINAPI*)(long,PCSTR,long); return at<F>(112176)(obj_,key_str,delay); }
+    long SendPaste(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(107936)(obj_,hwnd); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
