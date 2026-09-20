@@ -53,6 +53,44 @@ std::filesystem::path make_root() {
 
 
 
+
+struct BmpMetaProbe {
+    bool ok = false;
+    long width = 0;
+    long height = 0;
+    unsigned bit_count = 0;
+};
+
+BmpMetaProbe read_bmp_meta(const std::filesystem::path &path) {
+    BmpMetaProbe out{};
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return out;
+    BITMAPFILEHEADER fh{};
+    BITMAPINFOHEADER ih{};
+    in.read(reinterpret_cast<char *>(&fh), sizeof(fh));
+    in.read(reinterpret_cast<char *>(&ih), sizeof(ih));
+    if (!in || fh.bfType != 0x4D42 ||
+        ih.biSize < sizeof(BITMAPINFOHEADER))
+        return out;
+    out.ok = true;
+    out.width = ih.biWidth;
+    out.height = ih.biHeight;
+    out.bit_count = ih.biBitCount;
+    return out;
+}
+
+std::vector<unsigned char> read_prefix(
+    const std::filesystem::path &path,
+    size_t count) {
+    std::vector<unsigned char> out(count, 0);
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return {};
+    in.read(reinterpret_cast<char *>(out.data()),
+            static_cast<std::streamsize>(out.size()));
+    out.resize(static_cast<size_t>(in.gcount()));
+    return out;
+}
+
 bool write_test_bmp24(
     const std::filesystem::path &path,
     long width,
@@ -1558,6 +1596,62 @@ void test_picture_cache_and_find(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     std::filesystem::remove_all(root, ec);
 }
 
+
+void test_encoded_capture(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const auto root = make_root();
+    const auto old_png = root / "old.png";
+    const auto new_png = root / "new.png";
+    const auto old_jpg = root / "old.jpg";
+    const auto new_jpg = root / "new.jpg";
+    const auto old_bmp = root / "old_from_png.bmp";
+    const auto new_bmp = root / "new_from_png.bmp";
+
+    eq_num("CapturePng-ret",
+           old_dm.CapturePng(0,0,15,15,old_png.string().c_str()),
+           new_dm.CapturePng(0,0,15,15,new_png.string().c_str()));
+    eq_num("CaptureJpg-ret",
+           old_dm.CaptureJpg(0,0,15,15,old_jpg.string().c_str(),80),
+           new_dm.CaptureJpg(0,0,15,15,new_jpg.string().c_str(),80));
+
+    const auto op = read_prefix(old_png, 8);
+    const auto np = read_prefix(new_png, 8);
+    const std::vector<unsigned char> png_sig{137,80,78,71,13,10,26,10};
+    eq_num("CapturePng-old-format", op == png_sig ? 1 : 0, 1);
+    eq_num("CapturePng-new-format", np == png_sig ? 1 : 0, 1);
+
+    const auto oj = read_prefix(old_jpg, 2);
+    const auto nj = read_prefix(new_jpg, 2);
+    eq_num("CaptureJpg-old-format",
+           oj.size()==2 && oj[0]==0xff && oj[1]==0xd8 ? 1 : 0, 1);
+    eq_num("CaptureJpg-new-format",
+           nj.size()==2 && nj[0]==0xff && nj[1]==0xd8 ? 1 : 0, 1);
+
+    eq_num("CaptureJpg-quality0",
+           old_dm.CaptureJpg(0,0,15,15,(root/"bad_old.jpg").string().c_str(),0),
+           new_dm.CaptureJpg(0,0,15,15,(root/"bad_new.jpg").string().c_str(),0));
+    eq_num("CaptureJpg-quality101",
+           old_dm.CaptureJpg(0,0,15,15,(root/"bad_old2.jpg").string().c_str(),101),
+           new_dm.CaptureJpg(0,0,15,15,(root/"bad_new2.jpg").string().c_str(),101));
+
+    eq_num("ImageToBmp-ret",
+           old_dm.ImageToBmp(old_png.string().c_str(), old_bmp.string().c_str()),
+           new_dm.ImageToBmp(new_png.string().c_str(), new_bmp.string().c_str()));
+
+    const auto om = read_bmp_meta(old_bmp);
+    const auto nm = read_bmp_meta(new_bmp);
+    eq_num("ImageToBmp-old-valid", om.ok ? 1 : 0, 1);
+    eq_num("ImageToBmp-new-valid", nm.ok ? 1 : 0, 1);
+    if (om.ok && nm.ok) {
+        eq_num("ImageToBmp-width", om.width, nm.width);
+        eq_num("ImageToBmp-height", om.height, nm.height);
+        eq_num("ImageToBmp-bitcount", om.bit_count, nm.bit_count);
+        eq_num("ImageToBmp-24bit", nm.bit_count, 24u);
+    }
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1582,6 +1676,7 @@ int main(int argc, char **argv) {
         test_basic_settings(old_dm, new_dm);
         test_position_algorithms(old_dm, new_dm);
         test_picture_cache_and_find(old_dm, new_dm);
+        test_encoded_capture(old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_audio_aero(old_dm, new_dm);
