@@ -209,6 +209,14 @@ public:
     const char *FindColorE(long x1,long y1,long x2,long y2,PCSTR color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long); return at<F>(121088)(obj_,x1,y1,x2,y2,color,sim,dir); }
     const char *FindColorEx(long x1,long y1,long x2,long y2,PCSTR color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long); return at<F>(114304)(obj_,x1,y1,x2,y2,color,sim,dir); }
 
+    long FindMultiColor(long x1,long y1,long x2,long y2,PCSTR first_color,PCSTR offset_color,double sim,long dir,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long,long*,long*); return at<F>(120864)(obj_,x1,y1,x2,y2,first_color,offset_color,sim,dir,x,y); }
+    const char *FindMultiColorE(long x1,long y1,long x2,long y2,PCSTR first_color,PCSTR offset_color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long); return at<F>(105104)(obj_,x1,y1,x2,y2,first_color,offset_color,sim,dir); }
+    const char *FindMultiColorEx(long x1,long y1,long x2,long y2,PCSTR first_color,PCSTR offset_color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long); return at<F>(109792)(obj_,x1,y1,x2,y2,first_color,offset_color,sim,dir); }
+    long FindShape(long x1,long y1,long x2,long y2,PCSTR offset_color,double sim,long dir,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,double,long,long*,long*); return at<F>(123456)(obj_,x1,y1,x2,y2,offset_color,sim,dir,x,y); }
+    const char *FindShapeE(long x1,long y1,long x2,long y2,PCSTR offset_color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long); return at<F>(123760)(obj_,x1,y1,x2,y2,offset_color,sim,dir); }
+    const char *FindShapeEx(long x1,long y1,long x2,long y2,PCSTR offset_color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long); return at<F>(102704)(obj_,x1,y1,x2,y2,offset_color,sim,dir); }
+    long FindMulColor(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(102144)(obj_,x1,y1,x2,y2,color,sim); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
