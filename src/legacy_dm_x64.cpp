@@ -99,6 +99,8 @@ struct DmImpl {
     std::string dict_password;
     bool param64_to_pointer = false;
     std::string memory_find_result_file;
+    void *legacy_bin_buffer = nullptr;
+    SIZE_T legacy_bin_size = 0;
 };
 
 
@@ -3029,6 +3031,90 @@ std::string QueryProcessCommandLineCompat(DWORD pid) {
 
     return WideStringToAcpCompat(
         us->Buffer, static_cast<int>(us->Length / sizeof(wchar_t)));
+}
+
+
+void FreeLegacyBinBufferCompat(DmImpl *p) {
+    if (!p || !p->legacy_bin_buffer) return;
+    ::VirtualFree(p->legacy_bin_buffer, 0, MEM_RELEASE);
+    p->legacy_bin_buffer = nullptr;
+    p->legacy_bin_size = 0;
+}
+
+void *AllocateLegacyBinBufferCompat(DmImpl *p, SIZE_T size) {
+    if (!p || size == 0) return nullptr;
+    FreeLegacyBinBufferCompat(p);
+
+#if defined(_WIN64)
+    SYSTEM_INFO si{};
+    ::GetSystemInfo(&si);
+    const ULONG_PTR gran =
+        static_cast<ULONG_PTR>(si.dwAllocationGranularity);
+    const ULONG_PTR limit = 0x7FFF0000ULL;
+
+    MEMORY_BASIC_INFORMATION mbi{};
+    ULONG_PTR cursor = 0x00010000ULL;
+    while (cursor < limit) {
+        if (!::VirtualQuery(
+                reinterpret_cast<LPCVOID>(cursor), &mbi, sizeof(mbi)))
+            break;
+
+        const ULONG_PTR base =
+            reinterpret_cast<ULONG_PTR>(mbi.BaseAddress);
+        const ULONG_PTR region_size =
+            static_cast<ULONG_PTR>(mbi.RegionSize);
+        const ULONG_PTR region_end =
+            base <= std::numeric_limits<ULONG_PTR>::max() - region_size
+                ? base + region_size
+                : std::numeric_limits<ULONG_PTR>::max();
+
+        if (mbi.State == MEM_FREE) {
+            ULONG_PTR candidate =
+                (base + gran - 1) & ~(gran - 1);
+            if (candidate < limit &&
+                size <= limit - candidate &&
+                candidate + size <= region_end) {
+                void *mem = ::VirtualAlloc(
+                    reinterpret_cast<LPVOID>(candidate),
+                    size,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_READWRITE);
+                if (mem &&
+                    reinterpret_cast<ULONG_PTR>(mem) <=
+                        static_cast<ULONG_PTR>(LONG_MAX)) {
+                    p->legacy_bin_buffer = mem;
+                    p->legacy_bin_size = size;
+                    return mem;
+                }
+                if (mem) ::VirtualFree(mem, 0, MEM_RELEASE);
+            }
+        }
+
+        if (region_end <= cursor) break;
+        cursor = region_end;
+    }
+    return nullptr;
+#else
+    void *mem = ::VirtualAlloc(
+        nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!mem) return nullptr;
+    p->legacy_bin_buffer = mem;
+    p->legacy_bin_size = size;
+    return mem;
+#endif
+}
+
+bool CopyFromLegacyPointerCompat(long data, void *dst, SIZE_T size) {
+    if (!dst || size == 0 || data == 0) return false;
+    const ULONG_PTR address =
+        static_cast<ULONG_PTR>(
+            static_cast<unsigned long>(data));
+    SIZE_T got = 0;
+    return ::ReadProcessMemory(
+               ::GetCurrentProcess(),
+               reinterpret_cast<LPCVOID>(address),
+               dst, size, &got) &&
+           got == size;
 }
 
 } // namespace
@@ -6231,6 +6317,66 @@ const char *dmsoft::FindString(
     long hwnd, PCSTR addr_range, PCSTR string_value, long type) {
     return FindStringEx(
         hwnd, addr_range, string_value, type, 1, 1, 0);
+}
+
+
+long dmsoft::ReadDataAddrToBin(long hwnd, LONGLONG addr, long len) {
+    auto *p = P(impl);
+    if (!p || len <= 0) return 0;
+
+    void *buffer = AllocateLegacyBinBufferCompat(
+        p, static_cast<SIZE_T>(len));
+    if (!buffer) {
+        SetNativeError(p, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
+
+    if (!ReadRemoteBytesCompat(
+            p, hwnd, addr, buffer, static_cast<SIZE_T>(len))) {
+        FreeLegacyBinBufferCompat(p);
+        return 0;
+    }
+
+    const ULONG_PTR ptr = reinterpret_cast<ULONG_PTR>(buffer);
+    if (ptr > static_cast<ULONG_PTR>(LONG_MAX)) {
+        FreeLegacyBinBufferCompat(p);
+        SetNativeError(p, ERROR_ARITHMETIC_OVERFLOW);
+        return 0;
+    }
+    return static_cast<long>(ptr);
+}
+
+long dmsoft::ReadDataToBin(long hwnd, PCSTR addr, long len) {
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved))
+        return 0;
+    return ReadDataAddrToBin(hwnd, resolved, len);
+}
+
+long dmsoft::WriteDataAddrFromBin(
+    long hwnd, LONGLONG addr, long data, long len) {
+
+    auto *p = P(impl);
+    if (!p || data == 0 || len <= 0) return 0;
+
+    std::vector<unsigned char> bytes(static_cast<size_t>(len));
+    if (!CopyFromLegacyPointerCompat(
+            data, bytes.data(), bytes.size())) {
+        SetNativeError(p, ERROR_INVALID_ADDRESS);
+        return 0;
+    }
+
+    return WriteRemoteBytesCompat(
+        p, hwnd, addr, bytes.data(), bytes.size()) ? 1 : 0;
+}
+
+long dmsoft::WriteDataFromBin(
+    long hwnd, PCSTR addr, long data, long len) {
+
+    LONGLONG resolved = 0;
+    if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved))
+        return 0;
+    return WriteDataAddrFromBin(hwnd, resolved, data, len);
 }
 
 #include "legacy_dm_generated.inc"
