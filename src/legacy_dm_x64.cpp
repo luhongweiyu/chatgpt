@@ -278,8 +278,8 @@ LONGLONG dmsoft::GetModuleBaseAddr(long hwnd, PCSTR module_name) {
     auto *p=P(impl); if(!p)return 0; DWORD pid=ResolvePid(p,hwnd); if(!pid)return 0;
     HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid);
     if(snap==INVALID_HANDLE_VALUE){SetNativeError(p,static_cast<long>(::GetLastError()));return 0;}
-    MODULEENTRY32A me{};me.dwSize=sizeof(me);LONGLONG result=0;
-    if(Module32FirstA(snap,&me)){do{if(!module_name||!*module_name||_stricmp(me.szModule,module_name)==0||_stricmp(me.szExePath,module_name)==0){result=static_cast<LONGLONG>(reinterpret_cast<ULONG_PTR>(me.modBaseAddr));break;}}while(Module32NextA(snap,&me));}
+    MODULEENTRY32 me{};me.dwSize=sizeof(me);LONGLONG result=0;
+    if(Module32First(snap,&me)){do{if(!module_name||!*module_name||_stricmp(me.szModule,module_name)==0||_stricmp(me.szExePath,module_name)==0){result=static_cast<LONGLONG>(reinterpret_cast<ULONG_PTR>(me.modBaseAddr));break;}}while(Module32Next(snap,&me));}
     CloseHandle(snap);SetNativeError(p,result?0:ERROR_MOD_NOT_FOUND);return result;
 }
 
@@ -287,8 +287,8 @@ long dmsoft::GetModuleSize(long hwnd, PCSTR module_name) {
     auto *p=P(impl);if(!p)return 0;DWORD pid=ResolvePid(p,hwnd);if(!pid)return 0;
     HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid);
     if(snap==INVALID_HANDLE_VALUE){SetNativeError(p,static_cast<long>(::GetLastError()));return 0;}
-    MODULEENTRY32A me{};me.dwSize=sizeof(me);DWORD result=0;
-    if(Module32FirstA(snap,&me)){do{if(!module_name||!*module_name||_stricmp(me.szModule,module_name)==0||_stricmp(me.szExePath,module_name)==0){result=me.modBaseSize;break;}}while(Module32NextA(snap,&me));}
+    MODULEENTRY32 me{};me.dwSize=sizeof(me);DWORD result=0;
+    if(Module32First(snap,&me)){do{if(!module_name||!*module_name||_stricmp(me.szModule,module_name)==0||_stricmp(me.szExePath,module_name)==0){result=me.modBaseSize;break;}}while(Module32Next(snap,&me));}
     CloseHandle(snap);SetNativeError(p,result?0:ERROR_MOD_NOT_FOUND);return static_cast<long>(result);
 }
 
