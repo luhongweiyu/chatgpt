@@ -782,6 +782,63 @@ void test_position_algorithms(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     }
 }
 
+
+void test_word_result_and_input(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const char *cases[] = {
+        "10,30|20,40|A|B",
+        "1|2|only",
+        "|2|empty-x",
+        "",
+        "10,20|30,40|hello|world|"
+    };
+
+    for (const char *v : cases) {
+        eq_num("GetWordResultCount", old_dm.GetWordResultCount(v), new_dm.GetWordResultCount(v));
+        for (long index = -1; index < 5; ++index) {
+            long ox = 777, oy = 888, nx = 777, ny = 888;
+            const long orv = old_dm.GetWordResultPos(v, index, &ox, &oy);
+            const long nrv = new_dm.GetWordResultPos(v, index, &nx, &ny);
+            eq_num("GetWordResultPos-ret", orv, nrv);
+            eq_num("GetWordResultPos-x", ox, nx);
+            eq_num("GetWordResultPos-y", oy, ny);
+
+            const char *os = old_dm.GetWordResultStr(v, index);
+            const char *ns = new_dm.GetWordResultStr(v, index);
+            eq_str("GetWordResultStr",
+                   os ? std::string(os) : "<null>",
+                   ns ? std::string(ns) : "<null>");
+        }
+    }
+
+    // F24 is intentionally chosen because normal desktop applications almost
+    // never bind it. Down/up is paired immediately to avoid a stuck key.
+    eq_num("SetKeypadDelay-normal",
+           old_dm.SetKeypadDelay("normal", 1),
+           new_dm.SetKeypadDelay("normal", 1));
+    const long old_down = old_dm.KeyDown(VK_F24);
+    const long old_up = old_dm.KeyUp(VK_F24);
+    const long new_down = new_dm.KeyDown(VK_F24);
+    const long new_up = new_dm.KeyUp(VK_F24);
+    eq_num("KeyDown-F24", old_down, new_down);
+    eq_num("KeyUp-F24", old_up, new_up);
+
+    // Timeout-only path: no user input is synthesized here.
+    eq_num("WaitKey-F24-timeout",
+           old_dm.WaitKey(VK_F24, 1),
+           new_dm.WaitKey(VK_F24, 1));
+
+    eq_num("SetMouseDelay-normal",
+           old_dm.SetMouseDelay("normal", 1),
+           new_dm.SetMouseDelay("normal", 1));
+
+    POINT pt{};
+    ::GetCursorPos(&pt);
+    eq_num("MoveR-zero", old_dm.MoveR(0, 0), new_dm.MoveR(0, 0));
+    eq_num("MoveTo-current",
+           old_dm.MoveTo(pt.x, pt.y),
+           new_dm.MoveTo(pt.x, pt.y));
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -800,6 +857,7 @@ int main(int argc, char **argv) {
         test_pure_extended(old_dm, new_dm);
         test_basic_settings(old_dm, new_dm);
         test_position_algorithms(old_dm, new_dm);
+        test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
