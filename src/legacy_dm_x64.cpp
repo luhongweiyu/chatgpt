@@ -1027,6 +1027,25 @@ long SendStringAnsiCompat(long hwnd, PCSTR str) {
     return 1;
 }
 
+
+std::string ProcessImagePathCompat(DWORD pid) {
+    HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return {};
+    std::vector<char> buf(32768, 0);
+    DWORD size = static_cast<DWORD>(buf.size());
+    std::string out;
+    if (::QueryFullProcessImageNameA(process, 0, buf.data(), &size))
+        out.assign(buf.data(), size);
+    ::CloseHandle(process);
+    return out;
+}
+
+std::string BaseNameCompat(const std::string &path) {
+    if (path.empty()) return {};
+    const size_t p = path.find_last_of("\\/");
+    return p == std::string::npos ? path : path.substr(p + 1);
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -2683,6 +2702,118 @@ long dmsoft::SendPaste(long hwnd) {
 
 long dmsoft::SendString(long hwnd, PCSTR str) {
     return SendStringAnsiCompat(hwnd, str);
+}
+
+
+const char *dmsoft::GetDir(long type) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    std::vector<char> buf(32768, 0);
+    switch (type) {
+    case 0: {
+        const DWORD n = ::GetCurrentDirectoryA(static_cast<DWORD>(buf.size()), buf.data());
+        p->scratch = (n > 0 && n < buf.size()) ? std::string(buf.data(), n) : std::string();
+        break;
+    }
+    case 1: {
+        const UINT n = ::GetSystemDirectoryA(buf.data(), static_cast<UINT>(buf.size()));
+        p->scratch = (n > 0 && n < buf.size()) ? std::string(buf.data(), n) : std::string();
+        break;
+    }
+    case 2: {
+        const UINT n = ::GetWindowsDirectoryA(buf.data(), static_cast<UINT>(buf.size()));
+        p->scratch = (n > 0 && n < buf.size()) ? std::string(buf.data(), n) : std::string();
+        break;
+    }
+    case 3: {
+        const DWORD n = ::GetTempPathA(static_cast<DWORD>(buf.size()), buf.data());
+        p->scratch = (n > 0 && n < buf.size()) ? std::string(buf.data(), n) : std::string();
+        if (!p->scratch.empty()) {
+            while (p->scratch.size() > 3 &&
+                   (p->scratch.back() == '\\' || p->scratch.back() == '/'))
+                p->scratch.pop_back();
+        }
+        break;
+    }
+    case 4:
+        p->scratch = ModuleDirectoryCompat(false);
+        break;
+    default:
+        p->scratch.clear();
+        break;
+    }
+    return p->scratch.c_str();
+}
+
+long dmsoft::GetOsType() {
+    using RtlGetVersionFn = LONG (WINAPI *)(PRTL_OSVERSIONINFOW);
+    HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    auto fn = ntdll
+        ? reinterpret_cast<RtlGetVersionFn>(::GetProcAddress(ntdll, "RtlGetVersion"))
+        : nullptr;
+    if (!fn) return 0;
+
+    RTL_OSVERSIONINFOEXW vi{};
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    if (fn(reinterpret_cast<PRTL_OSVERSIONINFOW>(&vi)) != 0) return 0;
+
+    const DWORD major = vi.dwMajorVersion;
+    const DWORD minor = vi.dwMinorVersion;
+
+    if (major < 5) return 0;
+    if (major == 5 && (minor == 0 || minor == 1)) return 1;
+    if (major == 5 && minor >= 2) return 2;
+    if (major == 6 && minor == 0) return 4;
+    if (major == 6 && minor == 1) return 3;
+    if (major == 6 && minor == 2) return 5;
+    if (major == 6 && minor == 3) return 6;
+    if (major >= 10) return 7;
+    return 0;
+}
+
+const char *dmsoft::GetProcessInfo(long pid) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    const DWORD process_id = static_cast<DWORD>(pid);
+    const std::string path = ProcessImagePathCompat(process_id);
+    if (path.empty()) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    HANDLE process = ::OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+        FALSE, process_id);
+    if (!process) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    pmc.cb = sizeof(pmc);
+    SIZE_T working_set = 0;
+    if (::GetProcessMemoryInfo(
+            process,
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&pmc),
+            sizeof(pmc)))
+        working_set = pmc.WorkingSetSize;
+
+    FILETIME create{}, exit{}, kernel{}, user{};
+    ULONGLONG cpu_ms = 0;
+    if (::GetProcessTimes(process, &create, &exit, &kernel, &user)) {
+        cpu_ms = (FileTime64(kernel) + FileTime64(user)) / 10000ULL;
+    }
+    ::CloseHandle(process);
+
+    std::ostringstream oss;
+    oss << BaseNameCompat(path) << '|'
+        << path << '|'
+        << cpu_ms << '|'
+        << static_cast<unsigned long long>(working_set);
+    p->scratch = oss.str();
+    return p->scratch.c_str();
 }
 
 #include "legacy_dm_generated.inc"
