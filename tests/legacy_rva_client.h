@@ -330,6 +330,19 @@ public:
     long WriteDataAddrFromBin(long hwnd,LONGLONG addr,long data,long len) { using F=long(WINAPI*)(long,long,LONGLONG,long,long); return at<F>(113904)(obj_,hwnd,addr,data,len); }
     long WriteDataFromBin(long hwnd,PCSTR addr,long data,long len) { using F=long(WINAPI*)(long,long,PCSTR,long,long); return at<F>(104560)(obj_,hwnd,addr,data,len); }
 
+    long LoadPicByte(long addr,long size,PCSTR name) { using F=long(WINAPI*)(long,long,long,PCSTR); return at<F>(122672)(obj_,addr,size,name); }
+    const char *AppendPicAddr(PCSTR pic_info,long addr,long size) { using F=PCSTR(WINAPI*)(long,PCSTR,long,long); return at<F>(102576)(obj_,pic_info,addr,size); }
+    long FindPicMem(long x1,long y1,long x2,long y2,PCSTR pic_info,PCSTR delta_color,double sim,long dir,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long,long*,long*); return at<F>(114400)(obj_,x1,y1,x2,y2,pic_info,delta_color,sim,dir,x,y); }
+    const char *FindPicMemE(long x1,long y1,long x2,long y2,PCSTR pic_info,PCSTR delta_color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long); return at<F>(105728)(obj_,x1,y1,x2,y2,pic_info,delta_color,sim,dir); }
+    const char *FindPicMemEx(long x1,long y1,long x2,long y2,PCSTR pic_info,PCSTR delta_color,double sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long); return at<F>(114016)(obj_,x1,y1,x2,y2,pic_info,delta_color,sim,dir); }
+    long FindPicSimMem(long x1,long y1,long x2,long y2,PCSTR pic_info,PCSTR delta_color,long sim,long dir,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long,long*,long*); return at<F>(122304)(obj_,x1,y1,x2,y2,pic_info,delta_color,sim,dir,x,y); }
+    const char *FindPicSimMemE(long x1,long y1,long x2,long y2,PCSTR pic_info,PCSTR delta_color,long sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long); return at<F>(117840)(obj_,x1,y1,x2,y2,pic_info,delta_color,sim,dir); }
+    const char *FindPicSimMemEx(long x1,long y1,long x2,long y2,PCSTR pic_info,PCSTR delta_color,long sim,long dir) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,long,long); return at<F>(102288)(obj_,x1,y1,x2,y2,pic_info,delta_color,sim,dir); }
+    long GetScreenData(long x1,long y1,long x2,long y2) { using F=long(WINAPI*)(long,long,long,long,long); return at<F>(116752)(obj_,x1,y1,x2,y2); }
+    long GetScreenDataBmp(long x1,long y1,long x2,long y2,long *data,long *size) { using F=long(WINAPI*)(long,long,long,long,long,long*,long*); return at<F>(111696)(obj_,x1,y1,x2,y2,data,size); }
+    long FreeScreenData(long handle) { using F=long(WINAPI*)(long,long); return at<F>(111472)(obj_,handle); }
+    long SetExcludeRegion(long type,PCSTR info) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(107248)(obj_,type,info); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
