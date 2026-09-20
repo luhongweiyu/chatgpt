@@ -305,11 +305,4 @@ long dmsoft::VirtualFreeEx(long hwnd,LONGLONG addr) {
     if(!ok)SetNativeError(p,static_cast<long>(::GetLastError()));else SetNativeError(p,0);CloseHandle(h);return ok?1:0;
 }
 
-#include "legacy_dm_x64_part1.inc"
-#include "legacy_dm_x64_part2.inc"
-#include "legacy_dm_x64_part3.inc"
-#include "legacy_dm_x64_part4.inc"
-#include "legacy_dm_x64_part5.inc"
-#include "legacy_dm_x64_part6.inc"
-#include "legacy_dm_x64_part7.inc"
-#include "legacy_dm_x64_part8.inc"
+#include "legacy_dm_generated.inc"
