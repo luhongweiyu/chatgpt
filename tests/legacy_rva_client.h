@@ -325,6 +325,11 @@ public:
     const char *FindStringEx(long hwnd,PCSTR range,PCSTR value,long type,long step,long mt,long mode) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR,long,long,long,long); return at<F>(116608)(obj_,hwnd,range,value,type,step,mt,mode); }
     long SetMemoryFindResultToFile(PCSTR file) { using F=long(WINAPI*)(long,PCSTR); return at<F>(110736)(obj_,file); }
 
+    long ReadDataAddrToBin(long hwnd,LONGLONG addr,long len) { using F=long(WINAPI*)(long,long,LONGLONG,long); return at<F>(122000)(obj_,hwnd,addr,len); }
+    long ReadDataToBin(long hwnd,PCSTR addr,long len) { using F=long(WINAPI*)(long,long,PCSTR,long); return at<F>(121888)(obj_,hwnd,addr,len); }
+    long WriteDataAddrFromBin(long hwnd,LONGLONG addr,long data,long len) { using F=long(WINAPI*)(long,long,LONGLONG,long,long); return at<F>(113904)(obj_,hwnd,addr,data,len); }
+    long WriteDataFromBin(long hwnd,PCSTR addr,long data,long len) { using F=long(WINAPI*)(long,long,PCSTR,long,long); return at<F>(104560)(obj_,hwnd,addr,data,len); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
