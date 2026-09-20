@@ -1,0 +1,37 @@
+cmake_minimum_required(VERSION 3.20)
+project(hcbyj64 LANGUAGES CXX)
+
+if(NOT WIN32)
+    message(FATAL_ERROR "hcbyj64 is a Windows-only project.")
+endif()
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Build this project with an x64 generator/toolchain.")
+endif()
+
+add_library(hcbyj64 SHARED
+    src/legacy_dm_x64.cpp
+    src/op_dispatch.cpp
+)
+
+target_include_directories(hcbyj64
+    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_features(hcbyj64 PRIVATE cxx_std_17)
+target_compile_definitions(hcbyj64 PRIVATE HCBYJ64_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(hcbyj64 PRIVATE Ole32 OleAut32)
+
+if(MSVC)
+    target_compile_options(hcbyj64 PRIVATE /W4 /permissive- /EHsc)
+    set_property(TARGET hcbyj64 PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
+set_target_properties(hcbyj64 PROPERTIES
+    OUTPUT_NAME "hcbyj64"
+)
+
+add_executable(hcbyj64_smoke tests/smoke_test.cpp)
+target_include_directories(hcbyj64_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(hcbyj64_smoke PRIVATE hcbyj64)
+target_compile_features(hcbyj64_smoke PRIVATE cxx_std_17)
