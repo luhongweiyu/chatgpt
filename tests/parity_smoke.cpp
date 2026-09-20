@@ -1008,6 +1008,184 @@ void test_system_identity(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     }
 }
 
+
+LRESULT CALLBACK ColorParityWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps{};
+        HDC dc = ::BeginPaint(hwnd, &ps);
+        RECT r{};
+        ::GetClientRect(hwnd, &r);
+        const int mid_x = (r.right - r.left) / 2;
+        const int mid_y = (r.bottom - r.top) / 2;
+
+        struct Fill { RECT rc; COLORREF color; };
+        const Fill fills[] = {
+            {{0, 0, mid_x, mid_y}, RGB(255, 0, 0)},
+            {{mid_x, 0, r.right, mid_y}, RGB(0, 255, 0)},
+            {{0, mid_y, mid_x, r.bottom}, RGB(0, 0, 255)},
+            {{mid_x, mid_y, r.right, r.bottom}, RGB(255, 255, 255)},
+        };
+        for (const auto &fill : fills) {
+            HBRUSH brush = ::CreateSolidBrush(fill.color);
+            ::FillRect(dc, &fill.rc, brush);
+            ::DeleteObject(brush);
+        }
+        ::EndPaint(hwnd, &ps);
+        return 0;
+    }
+    return ::DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+void test_color_core(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const char *cls = "hcbyj_color_parity_window";
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = ColorParityWndProc;
+    wc.hInstance = ::GetModuleHandleA(nullptr);
+    wc.lpszClassName = cls;
+    wc.hCursor = ::LoadCursor(nullptr, IDC_ARROW);
+    ::RegisterClassA(&wc);
+
+    HWND hwnd = ::CreateWindowExA(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        cls,
+        "hcbyj-color-parity",
+        WS_POPUP,
+        120, 120, 64, 64,
+        nullptr, nullptr, wc.hInstance, nullptr);
+    if (!hwnd) {
+        fail("ColorParityWindow", "success", "failed");
+        return;
+    }
+
+    ::ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    ::UpdateWindow(hwnd);
+    ::SetWindowPos(
+        hwnd, HWND_TOPMOST, 120, 120, 64, 64,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    ::RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    ::GdiFlush();
+    ::Sleep(80);
+
+    POINT origin{0, 0};
+    ::ClientToScreen(hwnd, &origin);
+    const long x1 = origin.x;
+    const long y1 = origin.y;
+    const long x2 = x1 + 63;
+    const long y2 = y1 + 63;
+
+    struct PointCase {
+        long x;
+        long y;
+        const char *label;
+    };
+    const PointCase points[] = {
+        {x1 + 8,  y1 + 8,  "red"},
+        {x1 + 40, y1 + 8,  "green"},
+        {x1 + 8,  y1 + 40, "blue"},
+        {x1 + 40, y1 + 40, "white"},
+    };
+
+    for (long capture_mode : {0L, 1L}) {
+        eq_num(("EnableGetColorByCapture-" + std::to_string(capture_mode)).c_str(),
+               old_dm.EnableGetColorByCapture(capture_mode),
+               new_dm.EnableGetColorByCapture(capture_mode));
+
+        for (const auto &pt : points) {
+            {
+                const char *a = old_dm.GetColor(pt.x, pt.y);
+                const char *b = new_dm.GetColor(pt.x, pt.y);
+                eq_str((std::string("GetColor-") + pt.label + "-" + std::to_string(capture_mode)).c_str(),
+                       a ? std::string(a) : "<null>",
+                       b ? std::string(b) : "<null>");
+            }
+            {
+                const char *a = old_dm.GetColorBGR(pt.x, pt.y);
+                const char *b = new_dm.GetColorBGR(pt.x, pt.y);
+                eq_str((std::string("GetColorBGR-") + pt.label + "-" + std::to_string(capture_mode)).c_str(),
+                       a ? std::string(a) : "<null>",
+                       b ? std::string(b) : "<null>");
+            }
+            {
+                const char *a = old_dm.GetColorHSV(pt.x, pt.y);
+                const char *b = new_dm.GetColorHSV(pt.x, pt.y);
+                eq_str((std::string("GetColorHSV-") + pt.label + "-" + std::to_string(capture_mode)).c_str(),
+                       a ? std::string(a) : "<null>",
+                       b ? std::string(b) : "<null>");
+            }
+        }
+    }
+
+    old_dm.EnableGetColorByCapture(1);
+    new_dm.EnableGetColorByCapture(1);
+
+    {
+        const char *a = old_dm.GetAveRGB(x1, y1, x1 + 31, y1 + 31);
+        const char *b = new_dm.GetAveRGB(x1, y1, x1 + 31, y1 + 31);
+        eq_str("GetAveRGB-red-block", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.GetAveHSV(x1, y1, x1 + 31, y1 + 31);
+        const char *b = new_dm.GetAveHSV(x1, y1, x1 + 31, y1 + 31);
+        eq_str("GetAveHSV-red-block", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.GetAveRGB(x1, y1, x2, y2);
+        const char *b = new_dm.GetAveRGB(x1, y1, x2, y2);
+        eq_str("GetAveRGB-four-color", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.GetAveHSV(x1, y1, x2, y2);
+        const char *b = new_dm.GetAveHSV(x1, y1, x2, y2);
+        eq_str("GetAveHSV-four-color", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    eq_num("CmpColor-red-exact",
+           old_dm.CmpColor(x1 + 8, y1 + 8, "ff0000-000000", 1.0),
+           new_dm.CmpColor(x1 + 8, y1 + 8, "ff0000-000000", 1.0));
+    eq_num("CmpColor-red-mismatch",
+           old_dm.CmpColor(x1 + 8, y1 + 8, "00ff00-000000", 1.0),
+           new_dm.CmpColor(x1 + 8, y1 + 8, "00ff00-000000", 1.0));
+    eq_num("CmpColor-red-sim",
+           old_dm.CmpColor(x1 + 8, y1 + 8, "ee0000", 0.9),
+           new_dm.CmpColor(x1 + 8, y1 + 8, "ee0000", 0.9));
+
+    for (const char *spec : {"ff0000-000000", "ff0000|00ff00", "@ff0000|00ff00"}) {
+        eq_num((std::string("GetColorNum-") + spec).c_str(),
+               old_dm.GetColorNum(x1, y1, x2, y2, spec, 1.0),
+               new_dm.GetColorNum(x1, y1, x2, y2, spec, 1.0));
+    }
+
+    for (long dir = 0; dir <= 8; ++dir) {
+        long ox=-9, oy=-9, nx=-9, ny=-9;
+        const long orv = old_dm.FindColor(
+            x1, y1, x2, y2, "ff0000-000000", 1.0, dir, &ox, &oy);
+        const long nrv = new_dm.FindColor(
+            x1, y1, x2, y2, "ff0000-000000", 1.0, dir, &nx, &ny);
+        eq_num(("FindColor-ret-" + std::to_string(dir)).c_str(), orv, nrv);
+        eq_num(("FindColor-x-" + std::to_string(dir)).c_str(), ox, nx);
+        eq_num(("FindColor-y-" + std::to_string(dir)).c_str(), oy, ny);
+    }
+
+    {
+        const char *a = old_dm.FindColorE(
+            x1, y1, x2, y2, "00ff00-000000", 1.0, 0);
+        const char *b = new_dm.FindColorE(
+            x1, y1, x2, y2, "00ff00-000000", 1.0, 0);
+        eq_str("FindColorE", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        // A 4x4 subset keeps the returned coordinate string short and deterministic.
+        const char *a = old_dm.FindColorEx(
+            x1, y1, x1 + 3, y1 + 3, "ff0000-000000", 1.0, 0);
+        const char *b = new_dm.FindColorEx(
+            x1, y1, x1 + 3, y1 + 3, "ff0000-000000", 1.0, 0);
+        eq_str("FindColorEx", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    ::DestroyWindow(hwnd);
+    ::UnregisterClassA(cls, wc.hInstance);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1033,6 +1211,7 @@ int main(int argc, char **argv) {
         test_file_ini(old_dm, new_dm);
         test_memory(old_dm, new_dm);
         test_window(old_dm, new_dm);
+        test_color_core(old_dm, new_dm);
 
         FreeDm();
 
