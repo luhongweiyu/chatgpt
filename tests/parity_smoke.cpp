@@ -249,6 +249,61 @@ void test_memory(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     base = base ? base + 1 : exe;
     eq_num("GetModuleBaseAddr", old_dm.GetModuleBaseAddr(pid, base), new_dm.GetModuleBaseAddr(pid, base));
     eq_num("GetModuleSize", old_dm.GetModuleSize(pid, base), new_dm.GetModuleSize(pid, base));
+
+    {
+        const long old_handle = old_dm.OpenProcess(pid);
+        const long new_handle = new_dm.OpenProcess(pid);
+        eq_num("OpenProcess-success", old_handle != 0 ? 1 : 0, new_handle != 0 ? 1 : 0);
+        if (old_handle) ::CloseHandle(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(old_handle)));
+        if (new_handle) ::CloseHandle(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(new_handle)));
+    }
+
+    void *old_page = ::VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    void *new_page = ::VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (old_page && new_page) {
+        const long old_previous = old_dm.VirtualProtectEx(
+            pid, reinterpret_cast<LONGLONG>(old_page), 4096, 0, 0);
+        const long new_previous = new_dm.VirtualProtectEx(
+            pid, reinterpret_cast<LONGLONG>(new_page), 4096, 0, 0);
+        eq_num("VirtualProtectEx-old-protect", old_previous, new_previous);
+
+        const long old_restore = old_dm.VirtualProtectEx(
+            pid, reinterpret_cast<LONGLONG>(old_page), 4096, 1, old_previous);
+        const long new_restore = new_dm.VirtualProtectEx(
+            pid, reinterpret_cast<LONGLONG>(new_page), 4096, 1, new_previous);
+        eq_num("VirtualProtectEx-restore-return", old_restore, new_restore);
+    }
+
+    struct MBI32Probe {
+        DWORD BaseAddress;
+        DWORD AllocationBase;
+        DWORD AllocationProtect;
+        DWORD RegionSize;
+        DWORD State;
+        DWORD Protect;
+        DWORD Type;
+    };
+    if (old_page) {
+        MBI32Probe old_mbi{}, new_mbi{};
+        const char *a = old_dm.VirtualQueryEx(
+            pid, reinterpret_cast<LONGLONG>(old_page),
+            static_cast<long>(reinterpret_cast<INT_PTR>(&old_mbi)));
+        const std::string old_query = a ? a : "<null>";
+        const char *b = new_dm.VirtualQueryEx(
+            pid, reinterpret_cast<LONGLONG>(old_page),
+            static_cast<long>(reinterpret_cast<INT_PTR>(&new_mbi)));
+        const std::string new_query = b ? b : "<null>";
+        eq_str("VirtualQueryEx-string", old_query, new_query);
+        eq_num("VirtualQueryEx-struct",
+               std::memcmp(&old_mbi, &new_mbi, sizeof(old_mbi)), 0);
+    }
+
+    eq_num("FreeProcessMemory",
+           old_dm.FreeProcessMemory(pid),
+           new_dm.FreeProcessMemory(pid));
+
+    if (old_page) ::VirtualFree(old_page, 0, MEM_RELEASE);
+    if (new_page) ::VirtualFree(new_page, 0, MEM_RELEASE);
 }
 
 LRESULT CALLBACK ParityWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
