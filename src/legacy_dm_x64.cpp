@@ -56,6 +56,7 @@ struct DmImpl {
     long mouse_delay_normal = 30;
     long mouse_delay_windows = 10;
     long mouse_delay_dx = 40;
+    bool get_color_by_capture = true;
 };
 
 
@@ -1252,6 +1253,350 @@ std::string DisplayInfoCompat() {
         oss << names[i];
     }
     return oss.str();
+}
+
+
+struct RgbColorCompat {
+    unsigned char r = 0;
+    unsigned char g = 0;
+    unsigned char b = 0;
+};
+
+struct ColorRuleCompat {
+    RgbColorCompat color;
+    RgbColorCompat diff;
+    bool explicit_diff = false;
+};
+
+struct ColorSpecCompat {
+    bool inverse = false;
+    std::vector<ColorRuleCompat> rules;
+};
+
+struct ScreenImageCompat {
+    long x = 0;
+    long y = 0;
+    long width = 0;
+    long height = 0;
+    std::vector<RgbColorCompat> pixels;
+
+    const RgbColorCompat *At(long screen_x, long screen_y) const {
+        const long lx = screen_x - x;
+        const long ly = screen_y - y;
+        if (lx < 0 || ly < 0 || lx >= width || ly >= height) return nullptr;
+        return &pixels[static_cast<size_t>(ly) * static_cast<size_t>(width) +
+                       static_cast<size_t>(lx)];
+    }
+};
+
+bool CaptureScreenRegionCompat(long x1, long y1, long x2, long y2, ScreenImageCompat &out) {
+    out = {};
+    if (x2 < x1 || y2 < y1) return false;
+
+    const long long w64 = static_cast<long long>(x2) - x1 + 1;
+    const long long h64 = static_cast<long long>(y2) - y1 + 1;
+    if (w64 <= 0 || h64 <= 0 ||
+        w64 > std::numeric_limits<int>::max() ||
+        h64 > std::numeric_limits<int>::max() ||
+        static_cast<unsigned long long>(w64) * static_cast<unsigned long long>(h64) >
+            256ULL * 1024ULL * 1024ULL)
+        return false;
+
+    const int width = static_cast<int>(w64);
+    const int height = static_cast<int>(h64);
+    HDC screen = ::GetDC(nullptr);
+    if (!screen) return false;
+    HDC memory = ::CreateCompatibleDC(screen);
+    if (!memory) {
+        ::ReleaseDC(nullptr, screen);
+        return false;
+    }
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void *bits = nullptr;
+    HBITMAP bitmap = ::CreateDIBSection(
+        screen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap || !bits) {
+        if (bitmap) ::DeleteObject(bitmap);
+        ::DeleteDC(memory);
+        ::ReleaseDC(nullptr, screen);
+        return false;
+    }
+
+    HGDIOBJ old = ::SelectObject(memory, bitmap);
+    const BOOL copied = ::BitBlt(
+        memory, 0, 0, width, height, screen, x1, y1, SRCCOPY | CAPTUREBLT);
+
+    if (old) ::SelectObject(memory, old);
+
+    bool ok = copied != FALSE;
+    if (ok) {
+        out.x = x1;
+        out.y = y1;
+        out.width = width;
+        out.height = height;
+        out.pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
+
+        const auto *src = static_cast<const unsigned char *>(bits);
+        for (size_t i = 0; i < out.pixels.size(); ++i) {
+            out.pixels[i].b = src[i * 4 + 0];
+            out.pixels[i].g = src[i * 4 + 1];
+            out.pixels[i].r = src[i * 4 + 2];
+        }
+    }
+
+    ::DeleteObject(bitmap);
+    ::DeleteDC(memory);
+    ::ReleaseDC(nullptr, screen);
+    return ok;
+}
+
+bool ReadScreenPixelCompat(DmImpl *p, long x, long y, RgbColorCompat &out) {
+    if (p && p->get_color_by_capture) {
+        ScreenImageCompat image;
+        if (!CaptureScreenRegionCompat(x, y, x, y, image) || image.pixels.empty())
+            return false;
+        out = image.pixels.front();
+        return true;
+    }
+
+    HDC dc = ::GetDC(nullptr);
+    if (!dc) return false;
+    const COLORREF c = ::GetPixel(dc, x, y);
+    ::ReleaseDC(nullptr, dc);
+    if (c == CLR_INVALID) return false;
+    out.r = GetRValue(c);
+    out.g = GetGValue(c);
+    out.b = GetBValue(c);
+    return true;
+}
+
+bool ParseHexByteCompat(const std::string &s, size_t off, unsigned char &out) {
+    if (off + 2 > s.size()) return false;
+    auto hex = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    const int hi = hex(s[off]);
+    const int lo = hex(s[off + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out = static_cast<unsigned char>((hi << 4) | lo);
+    return true;
+}
+
+bool ParseRgbHexCompat(const std::string &s, RgbColorCompat &out) {
+    if (s.size() != 6) return false;
+    return ParseHexByteCompat(s, 0, out.r) &&
+           ParseHexByteCompat(s, 2, out.g) &&
+           ParseHexByteCompat(s, 4, out.b);
+}
+
+bool ParseColorSpecCompat(PCSTR text, ColorSpecCompat &out) {
+    out = {};
+    if (!text || !*text) return false;
+
+    std::string source(text);
+    if (!source.empty() && source.front() == '@') {
+        out.inverse = true;
+        source.erase(source.begin());
+    }
+    if (source.empty()) return false;
+
+    const auto parts = SplitCompat(source, '|');
+    for (const auto &part : parts) {
+        if (part.empty()) continue;
+        const size_t dash = part.find('-');
+        const std::string color_text =
+            dash == std::string::npos ? part : part.substr(0, dash);
+        const std::string diff_text =
+            dash == std::string::npos ? std::string() : part.substr(dash + 1);
+
+        ColorRuleCompat rule{};
+        if (!ParseRgbHexCompat(color_text, rule.color)) return false;
+        if (!diff_text.empty()) {
+            if (!ParseRgbHexCompat(diff_text, rule.diff)) return false;
+            rule.explicit_diff = true;
+        }
+        out.rules.push_back(rule);
+        if (out.rules.size() >= 10) break;
+    }
+    return !out.rules.empty();
+}
+
+unsigned char SimDiffCompat(double sim) {
+    if (sim < 0.0 || sim > 1.0) sim = 1.0;
+    const double raw = std::ceil((1.0 - sim) * 255.0);
+    return static_cast<unsigned char>(std::clamp(raw, 0.0, 255.0));
+}
+
+bool MatchOneColorCompat(
+    const RgbColorCompat &actual, const ColorRuleCompat &rule, double sim) {
+    const unsigned char implicit = SimDiffCompat(sim);
+    const unsigned char dr = rule.explicit_diff ? rule.diff.r : implicit;
+    const unsigned char dg = rule.explicit_diff ? rule.diff.g : implicit;
+    const unsigned char db = rule.explicit_diff ? rule.diff.b : implicit;
+    return std::abs(static_cast<int>(actual.r) - static_cast<int>(rule.color.r)) <= dr &&
+           std::abs(static_cast<int>(actual.g) - static_cast<int>(rule.color.g)) <= dg &&
+           std::abs(static_cast<int>(actual.b) - static_cast<int>(rule.color.b)) <= db;
+}
+
+bool MatchColorSpecCompat(
+    const RgbColorCompat &actual, const ColorSpecCompat &spec, double sim) {
+    bool matched = false;
+    for (const auto &rule : spec.rules) {
+        if (MatchOneColorCompat(actual, rule, sim)) {
+            matched = true;
+            break;
+        }
+    }
+    return spec.inverse ? !matched : matched;
+}
+
+std::string RgbHexCompat(const RgbColorCompat &c) {
+    char buf[7]{};
+    std::snprintf(buf, sizeof(buf), "%02x%02x%02x", c.r, c.g, c.b);
+    return buf;
+}
+
+std::string BgrHexCompat(const RgbColorCompat &c) {
+    char buf[7]{};
+    std::snprintf(buf, sizeof(buf), "%02x%02x%02x", c.b, c.g, c.r);
+    return buf;
+}
+
+struct HsvColorCompat {
+    long h = 0;
+    long s = 0;
+    long v = 0;
+};
+
+HsvColorCompat RgbToHsvCompat(const RgbColorCompat &c) {
+    const double r = static_cast<double>(c.r) / 255.0;
+    const double g = static_cast<double>(c.g) / 255.0;
+    const double b = static_cast<double>(c.b) / 255.0;
+    const double maxv = std::max({r, g, b});
+    const double minv = std::min({r, g, b});
+    const double delta = maxv - minv;
+
+    double h = 0.0;
+    if (delta > 0.0) {
+        if (maxv == r)
+            h = 60.0 * std::fmod((g - b) / delta, 6.0);
+        else if (maxv == g)
+            h = 60.0 * (((b - r) / delta) + 2.0);
+        else
+            h = 60.0 * (((r - g) / delta) + 4.0);
+        if (h < 0.0) h += 360.0;
+    }
+
+    const double saturation = maxv <= 0.0 ? 0.0 : delta / maxv;
+    HsvColorCompat out{};
+    out.h = static_cast<long>(std::lround(h));
+    if (out.h >= 360) out.h = 0;
+    out.s = static_cast<long>(std::lround(saturation * 100.0));
+    out.v = static_cast<long>(std::lround(maxv * 100.0));
+    return out;
+}
+
+std::string HsvStringCompat(const RgbColorCompat &c) {
+    const auto hsv = RgbToHsvCompat(c);
+    return std::to_string(hsv.h) + "." +
+           std::to_string(hsv.s) + "." +
+           std::to_string(hsv.v);
+}
+
+RgbColorCompat AverageRgbCompat(const ScreenImageCompat &image) {
+    RgbColorCompat result{};
+    if (image.pixels.empty()) return result;
+    unsigned long long sr = 0, sg = 0, sb = 0;
+    for (const auto &p : image.pixels) {
+        sr += p.r;
+        sg += p.g;
+        sb += p.b;
+    }
+    const unsigned long long n = image.pixels.size();
+    result.r = static_cast<unsigned char>(sr / n);
+    result.g = static_cast<unsigned char>(sg / n);
+    result.b = static_cast<unsigned char>(sb / n);
+    return result;
+}
+
+template <typename Fn>
+bool ForEachPointInDirectionCompat(
+    long x1, long y1, long x2, long y2, long dir, Fn &&fn) {
+    if (x2 < x1 || y2 < y1) return false;
+    if (dir < 0 || dir > 8) dir = 0;
+
+    if (dir == 4) {
+        struct Node { long x; long y; unsigned long long d; };
+        std::vector<Node> nodes;
+        const size_t width = static_cast<size_t>(x2 - x1 + 1);
+        const size_t height = static_cast<size_t>(y2 - y1 + 1);
+        if (width > 0 && height > std::numeric_limits<size_t>::max() / width)
+            return false;
+        nodes.reserve(width * height);
+        const long long cx2 = static_cast<long long>(x1) + x2;
+        const long long cy2 = static_cast<long long>(y1) + y2;
+        for (long y = y1; y <= y2; ++y) {
+            for (long x = x1; x <= x2; ++x) {
+                const long long dx = static_cast<long long>(x) * 2 - cx2;
+                const long long dy = static_cast<long long>(y) * 2 - cy2;
+                nodes.push_back({x, y, static_cast<unsigned long long>(dx * dx + dy * dy)});
+            }
+        }
+        std::stable_sort(nodes.begin(), nodes.end(), [](const Node &a, const Node &b) {
+            if (a.d != b.d) return a.d < b.d;
+            if (a.y != b.y) return a.y < b.y;
+            return a.x < b.x;
+        });
+        for (const auto &n : nodes)
+            if (fn(n.x, n.y)) return true;
+        return false;
+    }
+
+    auto xs = [&](bool reverse, auto &&body) {
+        if (!reverse) {
+            for (long x = x1; x <= x2; ++x) if (body(x)) return true;
+        } else {
+            for (long x = x2;; --x) {
+                if (body(x)) return true;
+                if (x == x1) break;
+            }
+        }
+        return false;
+    };
+    auto ys = [&](bool reverse, auto &&body) {
+        if (!reverse) {
+            for (long y = y1; y <= y2; ++y) if (body(y)) return true;
+        } else {
+            for (long y = y2;; --y) {
+                if (body(y)) return true;
+                if (y == y1) break;
+            }
+        }
+        return false;
+    };
+
+    switch (dir) {
+    case 0: return ys(false, [&](long y){ return xs(false, [&](long x){ return fn(x,y); }); });
+    case 1: return ys(true,  [&](long y){ return xs(false, [&](long x){ return fn(x,y); }); });
+    case 2: return ys(false, [&](long y){ return xs(true,  [&](long x){ return fn(x,y); }); });
+    case 3: return ys(true,  [&](long y){ return xs(true,  [&](long x){ return fn(x,y); }); });
+    case 5: return xs(false, [&](long x){ return ys(false, [&](long y){ return fn(x,y); }); });
+    case 6: return xs(true,  [&](long x){ return ys(false, [&](long y){ return fn(x,y); }); });
+    case 7: return xs(false, [&](long x){ return ys(true,  [&](long y){ return fn(x,y); }); });
+    case 8: return xs(true,  [&](long x){ return ys(true,  [&](long y){ return fn(x,y); }); });
+    default: return false;
+    }
 }
 
 } // namespace
@@ -3070,6 +3415,160 @@ const char *dmsoft::GetDisplayInfo() {
     auto *p = P(impl);
     if (!p) return "";
     p->scratch = DisplayInfoCompat();
+    return p->scratch.c_str();
+}
+
+
+
+long dmsoft::EnableGetColorByCapture(long enable) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->get_color_by_capture = enable != 0;
+    return 1;
+}
+
+const char *dmsoft::GetColor(long x, long y) {
+    auto *p = P(impl);
+    if (!p) return "";
+    RgbColorCompat color{};
+    p->scratch = ReadScreenPixelCompat(p, x, y, color) ? RgbHexCompat(color) : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetColorBGR(long x, long y) {
+    auto *p = P(impl);
+    if (!p) return "";
+    RgbColorCompat color{};
+    p->scratch = ReadScreenPixelCompat(p, x, y, color) ? BgrHexCompat(color) : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetColorHSV(long x, long y) {
+    auto *p = P(impl);
+    if (!p) return "";
+    RgbColorCompat color{};
+    p->scratch = ReadScreenPixelCompat(p, x, y, color) ? HsvStringCompat(color) : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetAveRGB(long x1, long y1, long x2, long y2) {
+    auto *p = P(impl);
+    if (!p) return "";
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch = RgbHexCompat(AverageRgbCompat(image));
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetAveHSV(long x1, long y1, long x2, long y2) {
+    auto *p = P(impl);
+    if (!p) return "";
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch = HsvStringCompat(AverageRgbCompat(image));
+    return p->scratch.c_str();
+}
+
+long dmsoft::CmpColor(long x, long y, PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p) return 1;
+    ColorSpecCompat spec;
+    RgbColorCompat actual{};
+    if (!ParseColorSpecCompat(color, spec) ||
+        !ReadScreenPixelCompat(p, x, y, actual))
+        return 1;
+    return MatchColorSpecCompat(actual, spec, sim) ? 0 : 1;
+}
+
+long dmsoft::GetColorNum(
+    long x1, long y1, long x2, long y2, PCSTR color, double sim) {
+    ColorSpecCompat spec;
+    if (!ParseColorSpecCompat(color, spec)) return 0;
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+
+    long count = 0;
+    for (const auto &pixel : image.pixels) {
+        if (MatchColorSpecCompat(pixel, spec, sim)) {
+            if (count == LONG_MAX) return LONG_MAX;
+            ++count;
+        }
+    }
+    return count;
+}
+
+long dmsoft::FindColor(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim, long dir, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y) return 0;
+
+    ColorSpecCompat spec;
+    if (!ParseColorSpecCompat(color, spec)) return 0;
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+
+    long found_x = -1, found_y = -1;
+    const bool found = ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir, [&](long px, long py) {
+            const auto *pixel = image.At(px, py);
+            if (pixel && MatchColorSpecCompat(*pixel, spec, sim)) {
+                found_x = px;
+                found_y = py;
+                return true;
+            }
+            return false;
+        });
+    if (!found) return 0;
+    *x = found_x;
+    *y = found_y;
+    return 1;
+}
+
+const char *dmsoft::FindColorE(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    FindColor(x1, y1, x2, y2, color, sim, dir, &x, &y);
+    p->scratch = std::to_string(x) + "|" + std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindColorEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    ColorSpecCompat spec;
+    ScreenImageCompat image;
+    if (!ParseColorSpecCompat(color, spec) ||
+        !CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::ostringstream oss;
+    long count = 0;
+    ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir, [&](long px, long py) {
+            const auto *pixel = image.At(px, py);
+            if (!pixel || !MatchColorSpecCompat(*pixel, spec, sim)) return false;
+            if (count) oss << '|';
+            oss << px << ',' << py;
+            ++count;
+            return count >= 1800;
+        });
+    p->scratch = oss.str();
     return p->scratch.c_str();
 }
 
