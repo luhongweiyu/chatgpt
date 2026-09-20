@@ -100,6 +100,16 @@ void test_system(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("GetDPI", old_dm.GetDPI(), new_dm.GetDPI());
     eq_num("GetOsBuildNumber", old_dm.GetOsBuildNumber(), new_dm.GetOsBuildNumber());
     eq_num("CheckFontSmooth", old_dm.CheckFontSmooth(), new_dm.CheckFontSmooth());
+    eq_num("GetKeyState", old_dm.GetKeyState(VK_F24), new_dm.GetKeyState(VK_F24));
+
+    const long old_speed = old_dm.GetMouseSpeed();
+    const long new_speed = new_dm.GetMouseSpeed();
+    eq_num("GetMouseSpeed", old_speed, new_speed);
+    if (old_speed >= 1 && old_speed <= 11 && new_speed >= 1 && new_speed <= 11) {
+        eq_num("SetMouseSpeed-current",
+               old_dm.SetMouseSpeed(old_speed),
+               new_dm.SetMouseSpeed(new_speed));
+    }
 }
 
 void test_env(LegacyRvaClient &old_dm, dmsoft &new_dm) {
@@ -495,6 +505,33 @@ void test_window(LegacyRvaClient &old_dm, dmsoft &new_dm) {
         ::SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
+
+
+    // Transparency is tested only on this temporary parity window.
+    ::SetWindowLongPtr(hwnd, GWL_EXSTYLE,
+        ::GetWindowLongPtr(hwnd, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_LAYERED));
+    const long old_trans_ret = old_dm.SetWindowTransparent(h, 180);
+    BYTE old_alpha = 255;
+    DWORD old_flags = 0;
+    COLORREF old_key = 0;
+    const BOOL old_layered = ::GetLayeredWindowAttributes(hwnd, &old_key, &old_alpha, &old_flags);
+
+    ::SetWindowLongPtr(hwnd, GWL_EXSTYLE,
+        ::GetWindowLongPtr(hwnd, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_LAYERED));
+
+    const long new_trans_ret = new_dm.SetWindowTransparent(h, 180);
+    BYTE new_alpha = 255;
+    DWORD new_flags = 0;
+    COLORREF new_key = 0;
+    const BOOL new_layered = ::GetLayeredWindowAttributes(hwnd, &new_key, &new_alpha, &new_flags);
+
+    eq_num("SetWindowTransparent-ret", old_trans_ret, new_trans_ret);
+    eq_num("SetWindowTransparent-query", old_layered ? 1 : 0, new_layered ? 1 : 0);
+    eq_num("SetWindowTransparent-alpha", old_alpha, new_alpha);
+    eq_num("SetWindowTransparent-flags", old_flags, new_flags);
+
+    ::SetWindowLongPtr(hwnd, GWL_EXSTYLE,
+        ::GetWindowLongPtr(hwnd, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_LAYERED));
 
     if (child) ::DestroyWindow(child);
 
