@@ -9,6 +9,7 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <wincrypt.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <cctype>
@@ -378,6 +379,26 @@ std::string JoinPidsCompat(const std::vector<DWORD> &pids) {
         oss << pids[i];
     }
     return oss.str();
+}
+
+long MouseSpeedLevelFromWindowsCompat(long speed) {
+    static const int map[11] = {1,2,4,6,8,10,12,14,16,18,20};
+    long best = 1;
+    long best_delta = LONG_MAX;
+    for (long i = 0; i < 11; ++i) {
+        const long delta = std::labs(speed - map[i]);
+        if (delta < best_delta) {
+            best_delta = delta;
+            best = i + 1;
+        }
+    }
+    return best;
+}
+
+long WindowsMouseSpeedFromLevelCompat(long level) {
+    static const int map[11] = {1,2,4,6,8,10,12,14,16,18,20};
+    if (level < 1 || level > 11) return 0;
+    return map[level - 1];
 }
 
 } // namespace
@@ -1433,6 +1454,71 @@ const char *dmsoft::VirtualQueryEx(long hwnd, LONGLONG addr, long pmbi) {
     SetNativeError(p, 0);
     ::CloseHandle(process);
     return p->scratch.c_str();
+}
+
+
+long dmsoft::GetKeyState(long vk) {
+    if (vk < 0 || vk > 255) return 0;
+    return (::GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) ? 1 : 0;
+}
+
+long dmsoft::GetMouseSpeed() {
+    UINT speed = 0;
+    if (!::SystemParametersInfoA(SPI_GETMOUSESPEED, 0, &speed, 0)) return 0;
+    return MouseSpeedLevelFromWindowsCompat(static_cast<long>(speed));
+}
+
+long dmsoft::SetMouseSpeed(long speed) {
+    const long native_speed = WindowsMouseSpeedFromLevelCompat(speed);
+    if (!native_speed) return 0;
+    return ::SystemParametersInfoA(
+        SPI_SETMOUSESPEED, 0,
+        reinterpret_cast<PVOID>(static_cast<INT_PTR>(native_speed)),
+        SPIF_SENDCHANGE) ? 1 : 0;
+}
+
+long dmsoft::SetWindowTransparent(long hwnd, long v) {
+    if (v < 0 || v > 255) return 0;
+    HWND h = HwndFromLong(hwnd);
+    if (!::IsWindow(h)) return 0;
+
+    LONG_PTR ex = ::GetWindowLongPtr(h, GWL_EXSTYLE);
+    if (!(ex & WS_EX_LAYERED)) {
+        ::SetLastError(0);
+        const LONG_PTR previous = ::SetWindowLongPtr(h, GWL_EXSTYLE, ex | WS_EX_LAYERED);
+        if (previous == 0 && ::GetLastError() != 0) return 0;
+    }
+    return ::SetLayeredWindowAttributes(h, 0, static_cast<BYTE>(v), LWA_ALPHA) ? 1 : 0;
+}
+
+long dmsoft::Beep(long fre, long delay) {
+    if (fre < 37 || fre > 32767 || delay < 0) return 0;
+    return ::Beep(static_cast<DWORD>(fre), static_cast<DWORD>(delay)) ? 1 : 0;
+}
+
+long dmsoft::RunApp(PCSTR path, long mode) {
+    if (!path || !*path) return 0;
+
+    if (mode == 0) {
+        const HINSTANCE r = ::ShellExecuteA(nullptr, "open", path, nullptr, nullptr, SW_SHOWNORMAL);
+        return reinterpret_cast<INT_PTR>(r) > 32 ? 1 : 0;
+    }
+    if (mode == 1) {
+        std::string cmd(path);
+        std::vector<char> buf(cmd.begin(), cmd.end());
+        buf.push_back('\0');
+        STARTUPINFOA si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (::CreateProcessA(nullptr, buf.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            ::CloseHandle(pi.hThread);
+            ::CloseHandle(pi.hProcess);
+            return 1;
+        }
+        const HINSTANCE r = ::ShellExecuteA(nullptr, "open", path, nullptr, nullptr, SW_SHOWNORMAL);
+        return reinterpret_cast<INT_PTR>(r) > 32 ? 1 : 0;
+    }
+    return 0;
 }
 
 #include "legacy_dm_generated.inc"
