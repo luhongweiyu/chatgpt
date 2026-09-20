@@ -53,7 +53,8 @@ set_target_properties(hcbyj64 PROPERTIES
 add_executable(hcbyj64_smoke tests/smoke_test.cpp)
 target_include_directories(hcbyj64_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(hcbyj64_smoke PRIVATE hcbyj64)
-target_compile_features(hcbyj64_smoke PRIVATE cxx_std_17)\n
+target_compile_features(hcbyj64_smoke PRIVATE cxx_std_17)
+
 # Win32 differential probe: the original hcbyj.dll is supplied only at runtime.
 # No proprietary reference binary/source is committed to the repository.
 if(CMAKE_SIZEOF_VOID_P EQUAL 4)
