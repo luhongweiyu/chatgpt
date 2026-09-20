@@ -53,42 +53,15 @@ set_target_properties(hcbyj64 PROPERTIES
 add_executable(hcbyj64_smoke tests/smoke_test.cpp)
 target_include_directories(hcbyj64_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(hcbyj64_smoke PRIVATE hcbyj64)
-target_compile_features(hcbyj64_smoke PRIVATE cxx_std_17)
-
-
-# Optional private x86 reference build. The original DLL/source stay in
-# reference/private and are ignored by git.
-set(HCBYJ_REFERENCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/reference/private")
-if(CMAKE_SIZEOF_VOID_P EQUAL 4
-   AND EXISTS "${HCBYJ_REFERENCE_DIR}/legacy_dm.h"
-   AND EXISTS "${HCBYJ_REFERENCE_DIR}/legacy_dm.cpp"
-   AND EXISTS "${HCBYJ_REFERENCE_DIR}/hcbyj.dll")
-    add_library(hcbyj_legacy_reference STATIC
-        "${HCBYJ_REFERENCE_DIR}/legacy_dm.cpp"
-    )
-    target_include_directories(hcbyj_legacy_reference PRIVATE "${HCBYJ_REFERENCE_DIR}")
-    target_compile_definitions(hcbyj_legacy_reference PRIVATE
-        dmsoft=legacy_dmsoft
-        LoadDm=LegacyLoadDm
-        LoadDmW=LegacyLoadDmW
-        FreeDm=LegacyFreeDm
-        NOMINMAX
-        WIN32_LEAN_AND_MEAN
-    )
-    target_compile_features(hcbyj_legacy_reference PRIVATE cxx_std_17)
-
+target_compile_features(hcbyj64_smoke PRIVATE cxx_std_17)\n
+# Win32 differential probe: the original hcbyj.dll is supplied only at runtime.
+# No proprietary reference binary/source is committed to the repository.
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
     add_executable(hcbyj_parity tests/parity_smoke.cpp)
     target_include_directories(hcbyj_parity PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/reference"
-        "${CMAKE_CURRENT_SOURCE_DIR}"
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
-    target_link_libraries(hcbyj_parity PRIVATE hcbyj64 hcbyj_legacy_reference)
+    target_link_libraries(hcbyj_parity PRIVATE hcbyj64)
     target_compile_features(hcbyj_parity PRIVATE cxx_std_17)
-
-    add_custom_command(TARGET hcbyj_parity POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${HCBYJ_REFERENCE_DIR}/hcbyj.dll"
-            "$<TARGET_FILE_DIR:hcbyj_parity>/hcbyj.dll"
-    )
 endif()
