@@ -153,6 +153,31 @@ public:
     const char *FindNearestPos(PCSTR all_pos,long type,long x,long y) { using F=PCSTR(WINAPI*)(long,PCSTR,long,long,long); return at<F>(115152)(obj_,all_pos,type,x,y); }
     const char *SortPosDistance(PCSTR all_pos,long type,long x,long y) { using F=PCSTR(WINAPI*)(long,PCSTR,long,long,long); return at<F>(117776)(obj_,all_pos,type,x,y); }
 
+    long GetWordResultCount(PCSTR str) { using F=long(WINAPI*)(long,PCSTR); return at<F>(118768)(obj_,str); }
+    long GetWordResultPos(PCSTR str,long index,long *x,long *y) { using F=long(WINAPI*)(long,PCSTR,long,long*,long*); return at<F>(115520)(obj_,str,index,x,y); }
+    const char *GetWordResultStr(PCSTR str,long index) { using F=PCSTR(WINAPI*)(long,PCSTR,long); return at<F>(122608)(obj_,str,index); }
+    long WaitKey(long key_code,long time_out) { using F=long(WINAPI*)(long,long,long); return at<F>(119248)(obj_,key_code,time_out); }
+    long SetKeypadDelay(PCSTR type,long delay) { using F=long(WINAPI*)(long,PCSTR,long); return at<F>(119152)(obj_,type,delay); }
+    long SetMouseDelay(PCSTR type,long delay) { using F=long(WINAPI*)(long,PCSTR,long); return at<F>(111472)(obj_,type,delay); }
+    long KeyPress(long vk) { using F=long(WINAPI*)(long,long); return at<F>(104224)(obj_,vk); }
+    long KeyDown(long vk) { using F=long(WINAPI*)(long,long); return at<F>(110784)(obj_,vk); }
+    long KeyUp(long vk) { using F=long(WINAPI*)(long,long); return at<F>(119696)(obj_,vk); }
+    long LeftClick() { using F=long(WINAPI*)(long); return at<F>(105440)(obj_); }
+    long RightClick() { using F=long(WINAPI*)(long); return at<F>(101920)(obj_); }
+    long MiddleClick() { using F=long(WINAPI*)(long); return at<F>(105824)(obj_); }
+    long LeftDoubleClick() { using F=long(WINAPI*)(long); return at<F>(113792)(obj_); }
+    long LeftDown() { using F=long(WINAPI*)(long); return at<F>(104384)(obj_); }
+    long LeftUp() { using F=long(WINAPI*)(long); return at<F>(122736)(obj_); }
+    long RightDown() { using F=long(WINAPI*)(long); return at<F>(123712)(obj_); }
+    long RightUp() { using F=long(WINAPI*)(long); return at<F>(126640)(obj_); }
+    long MiddleDown() { using F=long(WINAPI*)(long); return at<F>(124176)(obj_); }
+    long MiddleUp() { using F=long(WINAPI*)(long); return at<F>(101264)(obj_); }
+    long WheelUp() { using F=long(WINAPI*)(long); return at<F>(126896)(obj_); }
+    long WheelDown() { using F=long(WINAPI*)(long); return at<F>(117600)(obj_); }
+    long MoveTo(long x,long y) { using F=long(WINAPI*)(long,long,long); return at<F>(119072)(obj_,x,y); }
+    long MoveR(long rx,long ry) { using F=long(WINAPI*)(long,long,long); return at<F>(116688)(obj_,rx,ry); }
+    const char *MoveToEx(long x,long y,long w,long h) { using F=PCSTR(WINAPI*)(long,long,long,long,long); return at<F>(115328)(obj_,x,y,w,h); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
