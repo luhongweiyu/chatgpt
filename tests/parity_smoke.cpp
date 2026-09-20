@@ -52,6 +52,58 @@ std::filesystem::path make_root() {
 }
 
 
+
+bool write_test_bmp24(
+    const std::filesystem::path &path,
+    long width,
+    long height) {
+    if (width <= 0 || height <= 0) return false;
+
+    const DWORD row_bytes =
+        static_cast<DWORD>(((static_cast<unsigned long long>(width) * 3ULL + 3ULL) / 4ULL) * 4ULL);
+    const DWORD pixel_bytes = row_bytes * static_cast<DWORD>(height);
+
+    BITMAPFILEHEADER fh{};
+    BITMAPINFOHEADER ih{};
+    fh.bfType = 0x4D42;
+    fh.bfOffBits = sizeof(fh) + sizeof(ih);
+    fh.bfSize = fh.bfOffBits + pixel_bytes;
+
+    ih.biSize = sizeof(ih);
+    ih.biWidth = width;
+    ih.biHeight = height;
+    ih.biPlanes = 1;
+    ih.biBitCount = 24;
+    ih.biCompression = BI_RGB;
+    ih.biSizeImage = pixel_bytes;
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(reinterpret_cast<const char *>(&fh), sizeof(fh));
+    out.write(reinterpret_cast<const char *>(&ih), sizeof(ih));
+
+    std::vector<unsigned char> row(row_bytes, 0);
+    for (long file_y = 0; file_y < height; ++file_y) {
+        std::fill(row.begin(), row.end(), 0);
+        const long y = height - 1 - file_y;
+        for (long x = 0; x < width; ++x) {
+            // Four corners intentionally differ, so this fixture has no
+            // transparent corner color.
+            const unsigned char r =
+                static_cast<unsigned char>((x * 53 + y * 29 + 17) & 0xff);
+            const unsigned char g =
+                static_cast<unsigned char>((x * 31 + y * 71 + 43) & 0xff);
+            const unsigned char b =
+                static_cast<unsigned char>((x * 97 + y * 11 + 83) & 0xff);
+            row[static_cast<size_t>(x) * 3 + 0] = b;
+            row[static_cast<size_t>(x) * 3 + 1] = g;
+            row[static_cast<size_t>(x) * 3 + 2] = r;
+        }
+        out.write(reinterpret_cast<const char *>(row.data()), row.size());
+    }
+    return out.good();
+}
+
 bool write_silent_wav(const std::filesystem::path &path) {
     constexpr unsigned sample_rate = 8000;
     constexpr unsigned data_size = 800; // 100 ms, mono, unsigned 8-bit PCM
@@ -1348,6 +1400,164 @@ void test_audio_aero(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     std::filesystem::remove_all(root, ec);
 }
 
+
+void test_picture_cache_and_find(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const auto root = make_root();
+    const auto a = root / "pic_a.bmp";
+    const auto b = root / "pic_b.bmp";
+    const auto screen = root / "screen_fixture.bmp";
+
+    if (!write_test_bmp24(a, 4, 3) ||
+        !write_test_bmp24(b, 5, 4)) {
+        fail("write_test_bmp24", "success", "failed");
+        return;
+    }
+
+    eq_num("EnablePicCache-1",
+           old_dm.EnablePicCache(1),
+           new_dm.EnablePicCache(1));
+
+    const std::string wildcard =
+        (root / "pic_?.bmp").string();
+    {
+        const char *oa = old_dm.MatchPicName(wildcard.c_str());
+        const char *nb = new_dm.MatchPicName(wildcard.c_str());
+        eq_str("MatchPicName",
+               oa ? std::string(oa) : "<null>",
+               nb ? std::string(nb) : "<null>");
+    }
+
+    eq_num("LoadPic",
+           old_dm.LoadPic(a.string().c_str()),
+           new_dm.LoadPic(a.string().c_str()));
+
+    {
+        const char *oa = old_dm.GetPicSize(a.string().c_str());
+        const char *nb = new_dm.GetPicSize(a.string().c_str());
+        eq_str("GetPicSize-loaded",
+               oa ? std::string(oa) : "<null>",
+               nb ? std::string(nb) : "<null>");
+    }
+
+    // Change the file while it is cached. Both implementations should still
+    // see the cached dimensions until FreePic releases it.
+    if (write_test_bmp24(a, 6, 2)) {
+        const char *oa = old_dm.GetPicSize(a.string().c_str());
+        const char *nb = new_dm.GetPicSize(a.string().c_str());
+        eq_str("GetPicSize-cache-stale",
+               oa ? std::string(oa) : "<null>",
+               nb ? std::string(nb) : "<null>");
+    }
+
+    eq_num("FreePic",
+           old_dm.FreePic(a.string().c_str()),
+           new_dm.FreePic(a.string().c_str()));
+
+    {
+        const char *oa = old_dm.GetPicSize(a.string().c_str());
+        const char *nb = new_dm.GetPicSize(a.string().c_str());
+        eq_str("GetPicSize-after-free",
+               oa ? std::string(oa) : "<null>",
+               nb ? std::string(nb) : "<null>");
+    }
+
+    eq_num("EnablePicCache-0",
+           old_dm.EnablePicCache(0),
+           new_dm.EnablePicCache(0));
+    eq_num("EnablePicCache-1-restore",
+           old_dm.EnablePicCache(1),
+           new_dm.EnablePicCache(1));
+
+    // Build a deterministic find-picture fixture from the current display.
+    // The fixture is exactly the search rectangle, so an unchanged screen has
+    // only one possible full-template placement: (0,0).
+    if (new_dm.Capture(0, 0, 31, 31, screen.string().c_str()) == 1) {
+        long ox=-1, oy=-1, nx=-1, ny=-1;
+        const long orv = old_dm.FindPic(
+            0, 0, 31, 31, screen.string().c_str(), "000000",
+            1.0, 0, &ox, &oy);
+        const long nrv = new_dm.FindPic(
+            0, 0, 31, 31, screen.string().c_str(), "000000",
+            1.0, 0, &nx, &ny);
+        eq_num("FindPic-ret", orv, nrv);
+        eq_num("FindPic-x", ox, nx);
+        eq_num("FindPic-y", oy, ny);
+
+        {
+            const char *oa = old_dm.FindPicE(
+                0,0,31,31,screen.string().c_str(),"000000",1.0,0);
+            const char *nb = new_dm.FindPicE(
+                0,0,31,31,screen.string().c_str(),"000000",1.0,0);
+            eq_str("FindPicE",
+                   oa ? std::string(oa) : "<null>",
+                   nb ? std::string(nb) : "<null>");
+        }
+        {
+            const char *oa = old_dm.FindPicEx(
+                0,0,31,31,screen.string().c_str(),"000000",1.0,0);
+            const char *nb = new_dm.FindPicEx(
+                0,0,31,31,screen.string().c_str(),"000000",1.0,0);
+            eq_str("FindPicEx",
+                   oa ? std::string(oa) : "<null>",
+                   nb ? std::string(nb) : "<null>");
+        }
+
+        ox=oy=nx=ny=-1;
+        const char *os = old_dm.FindPicS(
+            0,0,31,31,screen.string().c_str(),"000000",1.0,0,&ox,&oy);
+        const std::string old_s = os ? os : "<null>";
+        const char *ns = new_dm.FindPicS(
+            0,0,31,31,screen.string().c_str(),"000000",1.0,0,&nx,&ny);
+        const std::string new_s = ns ? ns : "<null>";
+        eq_str("FindPicS-name", old_s, new_s);
+        eq_num("FindPicS-x", ox, nx);
+        eq_num("FindPicS-y", oy, ny);
+
+        {
+            const char *oa = old_dm.FindPicExS(
+                0,0,31,31,screen.string().c_str(),"000000",1.0,0);
+            const char *nb = new_dm.FindPicExS(
+                0,0,31,31,screen.string().c_str(),"000000",1.0,0);
+            eq_str("FindPicExS",
+                   oa ? std::string(oa) : "<null>",
+                   nb ? std::string(nb) : "<null>");
+        }
+
+        ox=oy=nx=ny=-1;
+        eq_num("FindPicSim-ret",
+               old_dm.FindPicSim(
+                   0,0,31,31,screen.string().c_str(),"000000",100,0,&ox,&oy),
+               new_dm.FindPicSim(
+                   0,0,31,31,screen.string().c_str(),"000000",100,0,&nx,&ny));
+        eq_num("FindPicSim-x", ox, nx);
+        eq_num("FindPicSim-y", oy, ny);
+
+        {
+            const char *oa = old_dm.FindPicSimE(
+                0,0,31,31,screen.string().c_str(),"000000",100,0);
+            const char *nb = new_dm.FindPicSimE(
+                0,0,31,31,screen.string().c_str(),"000000",100,0);
+            eq_str("FindPicSimE",
+                   oa ? std::string(oa) : "<null>",
+                   nb ? std::string(nb) : "<null>");
+        }
+        {
+            const char *oa = old_dm.FindPicSimEx(
+                0,0,31,31,screen.string().c_str(),"000000",100,0);
+            const char *nb = new_dm.FindPicSimEx(
+                0,0,31,31,screen.string().c_str(),"000000",100,0);
+            eq_str("FindPicSimEx",
+                   oa ? std::string(oa) : "<null>",
+                   nb ? std::string(nb) : "<null>");
+        }
+    } else {
+        fail("FindPic-fixture-capture", "1", "0");
+    }
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1371,6 +1581,7 @@ int main(int argc, char **argv) {
         test_pure_extended(old_dm, new_dm);
         test_basic_settings(old_dm, new_dm);
         test_position_algorithms(old_dm, new_dm);
+        test_picture_cache_and_find(old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_audio_aero(old_dm, new_dm);
