@@ -121,6 +121,13 @@ public:
     long VirtualProtectEx(long hwnd,LONGLONG addr,long size,long type,long old_protect) { using F=long(WINAPI*)(long,long,LONGLONG,long,long,long); return at<F>(120496)(obj_,hwnd,addr,size,type,old_protect); }
     const char *VirtualQueryEx(long hwnd,LONGLONG addr,long pmbi) { using F=PCSTR(WINAPI*)(long,long,LONGLONG,long); return at<F>(110832)(obj_,hwnd,addr,pmbi); }
 
+    long GetKeyState(long vk) { using F=long(WINAPI*)(long,long); return at<F>(105872)(obj_,vk); }
+    long GetMouseSpeed() { using F=long(WINAPI*)(long); return at<F>(110640)(obj_); }
+    long SetMouseSpeed(long speed) { using F=long(WINAPI*)(long,long); return at<F>(118928)(obj_,speed); }
+    long SetWindowTransparent(long hwnd,long trans) { using F=long(WINAPI*)(long,long,long); return at<F>(121024)(obj_,hwnd,trans); }
+    long Beep(long fre,long delay) { using F=long(WINAPI*)(long,long,long); return at<F>(104624)(obj_,fre,delay); }
+    long RunApp(PCSTR path,long mode) { using F=long(WINAPI*)(long,PCSTR,long); return at<F>(116544)(obj_,path,mode); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
