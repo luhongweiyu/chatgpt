@@ -292,6 +292,19 @@ public:
     long CaptureJpg(long x1,long y1,long x2,long y2,PCSTR file,long quality) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,long); return at<F>(106144)(obj_,x1,y1,x2,y2,file,quality); }
     long ImageToBmp(PCSTR pic_name,PCSTR bmp_name) { using F=long(WINAPI*)(long,PCSTR,PCSTR); return at<F>(107600)(obj_,pic_name,bmp_name); }
 
+    long UseDict(long index) { using F=long(WINAPI*)(long,long); return at<F>(126848)(obj_,index); }
+    long GetNowDict() { using F=long(WINAPI*)(long); return at<F>(123136)(obj_); }
+    long EnableShareDict(long en) { using F=long(WINAPI*)(long,long); return at<F>(111424)(obj_,en); }
+    long SetExactOcr(long en) { using F=long(WINAPI*)(long,long); return at<F>(124288)(obj_,en); }
+    long SetMinRowGap(long v) { using F=long(WINAPI*)(long,long); return at<F>(117552)(obj_,v); }
+    long SetMinColGap(long v) { using F=long(WINAPI*)(long,long); return at<F>(124960)(obj_,v); }
+    long SetWordGap(long v) { using F=long(WINAPI*)(long,long); return at<F>(109680)(obj_,v); }
+    long SetWordGapNoDict(long v) { using F=long(WINAPI*)(long,long); return at<F>(112128)(obj_,v); }
+    long SetWordLineHeight(long v) { using F=long(WINAPI*)(long,long); return at<F>(110896)(obj_,v); }
+    long SetWordLineHeightNoDict(long v) { using F=long(WINAPI*)(long,long); return at<F>(112016)(obj_,v); }
+    long SetRowGapNoDict(long v) { using F=long(WINAPI*)(long,long); return at<F>(118464)(obj_,v); }
+    long SetColGapNoDict(long v) { using F=long(WINAPI*)(long,long); return at<F>(106640)(obj_,v); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
