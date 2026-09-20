@@ -91,6 +91,15 @@ std::vector<unsigned char> read_prefix(
     return out;
 }
 
+std::vector<unsigned char> read_all_bytes(
+    const std::filesystem::path &path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return {};
+    return std::vector<unsigned char>(
+        std::istreambuf_iterator<char>(in),
+        std::istreambuf_iterator<char>());
+}
+
 bool write_test_bmp24(
     const std::filesystem::path &path,
     long width,
@@ -1668,6 +1677,110 @@ void test_picture_cache_and_find(LegacyRvaClient &old_dm, dmsoft &new_dm) {
                    oa ? std::string(oa) : "<null>",
                    nb ? std::string(nb) : "<null>");
         }
+
+
+        const auto bmp_bytes = read_all_bytes(screen);
+        if (!bmp_bytes.empty() &&
+            bmp_bytes.size() <= static_cast<size_t>(LONG_MAX)) {
+            const long bmp_addr = static_cast<long>(
+                reinterpret_cast<INT_PTR>(bmp_bytes.data()));
+            const long bmp_size = static_cast<long>(bmp_bytes.size());
+
+            const char *old_info_ptr =
+                old_dm.AppendPicAddr("", bmp_addr, bmp_size);
+            const std::string old_info =
+                old_info_ptr ? old_info_ptr : "<null>";
+            const char *new_info_ptr =
+                new_dm.AppendPicAddr("", bmp_addr, bmp_size);
+            const std::string new_info =
+                new_info_ptr ? new_info_ptr : "<null>";
+            eq_str("AppendPicAddr", old_info, new_info);
+
+            const char *old_info2_ptr =
+                old_dm.AppendPicAddr(old_info.c_str(), bmp_addr, bmp_size);
+            const std::string old_info2 =
+                old_info2_ptr ? old_info2_ptr : "<null>";
+            const char *new_info2_ptr =
+                new_dm.AppendPicAddr(new_info.c_str(), bmp_addr, bmp_size);
+            const std::string new_info2 =
+                new_info2_ptr ? new_info2_ptr : "<null>";
+            eq_str("AppendPicAddr-second", old_info2, new_info2);
+
+            eq_num("LoadPicByte",
+                   old_dm.LoadPicByte(bmp_addr, bmp_size, "memory_fixture.bmp"),
+                   new_dm.LoadPicByte(bmp_addr, bmp_size, "memory_fixture.bmp"));
+            {
+                const char *oa =
+                    old_dm.GetPicSize("memory_fixture.bmp");
+                const char *nb =
+                    new_dm.GetPicSize("memory_fixture.bmp");
+                eq_str("LoadPicByte-GetPicSize",
+                       oa ? std::string(oa) : "<null>",
+                       nb ? std::string(nb) : "<null>");
+            }
+
+            ox=oy=nx=ny=-1;
+            eq_num("FindPicMem-ret",
+                   old_dm.FindPicMem(
+                       0,0,31,31,old_info.c_str(),"000000",1.0,0,&ox,&oy),
+                   new_dm.FindPicMem(
+                       0,0,31,31,new_info.c_str(),"000000",1.0,0,&nx,&ny));
+            eq_num("FindPicMem-x", ox, nx);
+            eq_num("FindPicMem-y", oy, ny);
+
+            {
+                const char *oa = old_dm.FindPicMemE(
+                    0,0,31,31,old_info.c_str(),"000000",1.0,0);
+                const char *nb = new_dm.FindPicMemE(
+                    0,0,31,31,new_info.c_str(),"000000",1.0,0);
+                eq_str("FindPicMemE",
+                       oa ? std::string(oa) : "<null>",
+                       nb ? std::string(nb) : "<null>");
+            }
+            {
+                const char *oa = old_dm.FindPicMemEx(
+                    0,0,31,31,old_info.c_str(),"000000",1.0,0);
+                const char *nb = new_dm.FindPicMemEx(
+                    0,0,31,31,new_info.c_str(),"000000",1.0,0);
+                eq_str("FindPicMemEx",
+                       oa ? std::string(oa) : "<null>",
+                       nb ? std::string(nb) : "<null>");
+            }
+
+            ox=oy=nx=ny=-1;
+            eq_num("FindPicSimMem-ret",
+                   old_dm.FindPicSimMem(
+                       0,0,31,31,old_info.c_str(),"000000",100,0,&ox,&oy),
+                   new_dm.FindPicSimMem(
+                       0,0,31,31,new_info.c_str(),"000000",100,0,&nx,&ny));
+            eq_num("FindPicSimMem-x", ox, nx);
+            eq_num("FindPicSimMem-y", oy, ny);
+
+            {
+                const char *oa = old_dm.FindPicSimMemE(
+                    0,0,31,31,old_info.c_str(),"000000",100,0);
+                const char *nb = new_dm.FindPicSimMemE(
+                    0,0,31,31,new_info.c_str(),"000000",100,0);
+                eq_str("FindPicSimMemE",
+                       oa ? std::string(oa) : "<null>",
+                       nb ? std::string(nb) : "<null>");
+            }
+            {
+                const char *oa = old_dm.FindPicSimMemEx(
+                    0,0,31,31,old_info.c_str(),"000000",100,0);
+                const char *nb = new_dm.FindPicSimMemEx(
+                    0,0,31,31,new_info.c_str(),"000000",100,0);
+                eq_str("FindPicSimMemEx",
+                       oa ? std::string(oa) : "<null>",
+                       nb ? std::string(nb) : "<null>");
+            }
+
+            eq_num("FreePic-memory",
+                   old_dm.FreePic("memory_fixture.bmp"),
+                   new_dm.FreePic("memory_fixture.bmp"));
+        } else {
+            fail("memory-picture-fixture", "valid BMP bytes", "empty");
+        }
     } else {
         fail("FindPic-fixture-capture", "1", "0");
     }
@@ -2021,6 +2134,85 @@ void test_memory_search(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     ::VirtualFree(mem, 0, MEM_RELEASE);
 }
 
+
+void test_screen_buffers(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const long ox1 = 0, oy1 = 0, ox2 = 1, oy2 = 1;
+
+    const long old_ptr = old_dm.GetScreenData(ox1, oy1, ox2, oy2);
+    const long new_ptr = new_dm.GetScreenData(ox1, oy1, ox2, oy2);
+    eq_num("GetScreenData-nonzero",
+           old_ptr != 0 ? 1 : 0,
+           new_ptr != 0 ? 1 : 0);
+    if (old_ptr && new_ptr) {
+        DWORD old_pixels[4]{};
+        DWORD new_pixels[4]{};
+        SIZE_T got1 = 0, got2 = 0;
+        const BOOL r1 = ::ReadProcessMemory(
+            ::GetCurrentProcess(),
+            reinterpret_cast<LPCVOID>(
+                static_cast<ULONG_PTR>(
+                    static_cast<unsigned long>(old_ptr))),
+            old_pixels, sizeof(old_pixels), &got1);
+        const BOOL r2 = ::ReadProcessMemory(
+            ::GetCurrentProcess(),
+            reinterpret_cast<LPCVOID>(
+                static_cast<ULONG_PTR>(
+                    static_cast<unsigned long>(new_ptr))),
+            new_pixels, sizeof(new_pixels), &got2);
+        eq_num("GetScreenData-readable", r1 ? 1 : 0, r2 ? 1 : 0);
+        if (r1 && r2 && got1 == sizeof(old_pixels) &&
+            got2 == sizeof(new_pixels)) {
+            eq_num("GetScreenData-pixels",
+                   std::memcmp(old_pixels,new_pixels,sizeof(old_pixels)),0);
+        }
+    }
+
+    long old_bmp = 0, old_size = 0;
+    long new_bmp = 0, new_size = 0;
+    eq_num("GetScreenDataBmp-ret",
+           old_dm.GetScreenDataBmp(
+               ox1,oy1,ox2,oy2,&old_bmp,&old_size),
+           new_dm.GetScreenDataBmp(
+               ox1,oy1,ox2,oy2,&new_bmp,&new_size));
+    eq_num("GetScreenDataBmp-size", old_size, new_size);
+    eq_num("GetScreenDataBmp-nonzero",
+           old_bmp != 0 ? 1 : 0,
+           new_bmp != 0 ? 1 : 0);
+
+    if (old_bmp && new_bmp && old_size > 0 &&
+        old_size == new_size) {
+        std::vector<unsigned char> old_bytes(
+            static_cast<size_t>(old_size));
+        std::vector<unsigned char> new_bytes(
+            static_cast<size_t>(new_size));
+        SIZE_T got1=0, got2=0;
+        const BOOL r1=::ReadProcessMemory(
+            ::GetCurrentProcess(),
+            reinterpret_cast<LPCVOID>(
+                static_cast<ULONG_PTR>(
+                    static_cast<unsigned long>(old_bmp))),
+            old_bytes.data(),old_bytes.size(),&got1);
+        const BOOL r2=::ReadProcessMemory(
+            ::GetCurrentProcess(),
+            reinterpret_cast<LPCVOID>(
+                static_cast<ULONG_PTR>(
+                    static_cast<unsigned long>(new_bmp))),
+            new_bytes.data(),new_bytes.size(),&got2);
+        eq_num("GetScreenDataBmp-readable",r1?1:0,r2?1:0);
+        if(r1&&r2&&got1==old_bytes.size()&&got2==new_bytes.size()) {
+            // Compare BMP structure and dimensions first; pixel bytes should
+            // also match for the same stable two-by-two desktop area.
+            eq_num("GetScreenDataBmp-bytes",
+                   std::memcmp(
+                       old_bytes.data(),new_bytes.data(),old_bytes.size()),0);
+        }
+    }
+
+    eq_num("FreeScreenData",
+           old_dm.FreeScreenData(old_bmp),
+           new_dm.FreeScreenData(new_bmp));
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2046,6 +2238,7 @@ int main(int argc, char **argv) {
         test_system_paths_and_commandline(old_dm, new_dm);
         test_position_algorithms(old_dm, new_dm);
         test_picture_cache_and_find(old_dm, new_dm);
+        test_screen_buffers(old_dm, new_dm);
         test_encoded_capture(old_dm, new_dm);
         test_ocr_state(old_dm, new_dm);
         test_critical_and_password(legacy_path, old_dm, new_dm);
