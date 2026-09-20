@@ -184,6 +184,8 @@ public:
     long KeyPressStr(PCSTR key_str,long delay) { using F=long(WINAPI*)(long,PCSTR,long); return at<F>(112176)(obj_,key_str,delay); }
     long SendPaste(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(107936)(obj_,hwnd); }
 
+    long SendString(long hwnd,PCSTR str) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(119888)(obj_,hwnd,str); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
