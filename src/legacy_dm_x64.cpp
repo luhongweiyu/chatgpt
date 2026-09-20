@@ -551,4 +551,177 @@ long dmsoft::GetOsBuildNumber() {
 
 long dmsoft::GetTime() { return static_cast<long>(::GetTickCount()); }
 
+
+const char *dmsoft::GetClipboard() {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch.clear();
+    if (!::OpenClipboard(nullptr)) return p->scratch.c_str();
+    HANDLE h = ::GetClipboardData(CF_TEXT);
+    if (h) {
+        const char *text = static_cast<const char *>(::GlobalLock(h));
+        if (text) { p->scratch = text; ::GlobalUnlock(h); }
+    }
+    ::CloseClipboard();
+    return p->scratch.c_str();
+}
+
+long dmsoft::SetClipboard(PCSTR data) {
+    if (!data || !::OpenClipboard(nullptr)) return 0;
+    if (!::EmptyClipboard()) { ::CloseClipboard(); return 0; }
+    const SIZE_T bytes = std::strlen(data) + 1;
+    HGLOBAL mem = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!mem) { ::CloseClipboard(); return 0; }
+    void *dst = ::GlobalLock(mem);
+    if (!dst) { ::GlobalFree(mem); ::CloseClipboard(); return 0; }
+    std::memcpy(dst, data, bytes);
+    ::GlobalUnlock(mem);
+    if (!::SetClipboardData(CF_TEXT, mem)) { ::GlobalFree(mem); ::CloseClipboard(); return 0; }
+    ::CloseClipboard();
+    return 1;
+}
+
+long dmsoft::FindWindow(PCSTR class_name, PCSTR title_name) {
+    HWND h = ::FindWindowA((class_name && *class_name) ? class_name : nullptr,
+                           (title_name && *title_name) ? title_name : nullptr);
+    return static_cast<long>(reinterpret_cast<INT_PTR>(h));
+}
+
+long dmsoft::FindWindowEx(long parent, PCSTR class_name, PCSTR title_name) {
+    HWND h = ::FindWindowExA(HwndFromLong(parent), nullptr,
+                             (class_name && *class_name) ? class_name : nullptr,
+                             (title_name && *title_name) ? title_name : nullptr);
+    return static_cast<long>(reinterpret_cast<INT_PTR>(h));
+}
+
+long dmsoft::GetForegroundWindow() {
+    return static_cast<long>(reinterpret_cast<INT_PTR>(::GetForegroundWindow()));
+}
+
+long dmsoft::GetMousePointWindow() {
+    POINT pt{};
+    if (!::GetCursorPos(&pt)) return 0;
+    return static_cast<long>(reinterpret_cast<INT_PTR>(::WindowFromPoint(pt)));
+}
+
+long dmsoft::GetPointWindow(long x, long y) {
+    POINT pt{static_cast<LONG>(x), static_cast<LONG>(y)};
+    return static_cast<long>(reinterpret_cast<INT_PTR>(::WindowFromPoint(pt)));
+}
+
+long dmsoft::GetWindowRect(long hwnd, long *x1, long *y1, long *x2, long *y2) {
+    if (!x1 || !y1 || !x2 || !y2) return 0;
+    RECT r{};
+    if (!::GetWindowRect(HwndFromLong(hwnd), &r)) return 0;
+    *x1 = r.left; *y1 = r.top; *x2 = r.right; *y2 = r.bottom;
+    return 1;
+}
+
+long dmsoft::GetClientRect(long hwnd, long *x1, long *y1, long *x2, long *y2) {
+    if (!x1 || !y1 || !x2 || !y2) return 0;
+    RECT r{};
+    if (!::GetClientRect(HwndFromLong(hwnd), &r)) return 0;
+    *x1 = r.left; *y1 = r.top; *x2 = r.right; *y2 = r.bottom;
+    return 1;
+}
+
+long dmsoft::GetClientSize(long hwnd, long *width, long *height) {
+    if (!width || !height) return 0;
+    RECT r{};
+    if (!::GetClientRect(HwndFromLong(hwnd), &r)) return 0;
+    *width = r.right - r.left; *height = r.bottom - r.top;
+    return 1;
+}
+
+long dmsoft::MoveWindow(long hwnd, long x, long y) {
+    RECT r{};
+    HWND h = HwndFromLong(hwnd);
+    if (!::GetWindowRect(h, &r)) return 0;
+    return ::MoveWindow(h, x, y, r.right - r.left, r.bottom - r.top, TRUE) ? 1 : 0;
+}
+
+long dmsoft::SetWindowSize(long hwnd, long width, long height) {
+    HWND h = HwndFromLong(hwnd);
+    return ::SetWindowPos(h, nullptr, 0, 0, width, height,
+                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) ? 1 : 0;
+}
+
+long dmsoft::SetClientSize(long hwnd, long width, long height) {
+    HWND h = HwndFromLong(hwnd);
+    RECT rc{0, 0, width, height};
+    const DWORD style = static_cast<DWORD>(::GetWindowLongPtr(h, GWL_STYLE));
+    const DWORD ex = static_cast<DWORD>(::GetWindowLongPtr(h, GWL_EXSTYLE));
+    if (!::AdjustWindowRectEx(&rc, style, ::GetMenu(h) != nullptr, ex)) return 0;
+    return ::SetWindowPos(h, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) ? 1 : 0;
+}
+
+long dmsoft::SetWindowText(long hwnd, PCSTR text) {
+    return ::SetWindowTextA(HwndFromLong(hwnd), text ? text : "") ? 1 : 0;
+}
+
+const char *dmsoft::GetWindowTitle(long hwnd) {
+    auto *p = P(impl);
+    if (!p) return "";
+    const int n = ::GetWindowTextLengthA(HwndFromLong(hwnd));
+    std::vector<char> buf(static_cast<size_t>(std::max(1, n + 1)), 0);
+    ::GetWindowTextA(HwndFromLong(hwnd), buf.data(), static_cast<int>(buf.size()));
+    p->scratch = buf.data();
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetWindowClass(long hwnd) {
+    auto *p = P(impl);
+    if (!p) return "";
+    char buf[512]{};
+    ::GetClassNameA(HwndFromLong(hwnd), buf, static_cast<int>(sizeof(buf)));
+    p->scratch = buf;
+    return p->scratch.c_str();
+}
+
+long dmsoft::ClientToScreen(long hwnd, long *x, long *y) {
+    if (!x || !y) return 0;
+    POINT pt{*x, *y};
+    if (!::ClientToScreen(HwndFromLong(hwnd), &pt)) return 0;
+    *x = pt.x; *y = pt.y; return 1;
+}
+
+long dmsoft::ScreenToClient(long hwnd, long *x, long *y) {
+    if (!x || !y) return 0;
+    POINT pt{*x, *y};
+    if (!::ScreenToClient(HwndFromLong(hwnd), &pt)) return 0;
+    *x = pt.x; *y = pt.y; return 1;
+}
+
+long dmsoft::GetCursorPos(long *x, long *y) {
+    if (!x || !y) return 0;
+    POINT pt{};
+    if (!::GetCursorPos(&pt)) return 0;
+    *x = pt.x; *y = pt.y; return 1;
+}
+
+const char *dmsoft::GetWindowProcessPath(long hwnd) {
+    auto *p = P(impl);
+    if (!p) return "";
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(HwndFromLong(hwnd), &pid);
+    HANDLE proc = pid ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr;
+    if (!proc) { p->scratch.clear(); return p->scratch.c_str(); }
+    std::vector<char> buf(32768, 0);
+    DWORD n = static_cast<DWORD>(buf.size());
+    if (!::QueryFullProcessImageNameA(proc, 0, buf.data(), &n)) n = 0;
+    ::CloseHandle(proc);
+    p->scratch.assign(buf.data(), n);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetRealPath(PCSTR path) {
+    auto *p = P(impl);
+    if (!p || !path) return "";
+    std::vector<char> buf(32768, 0);
+    const DWORD n = ::GetFullPathNameA(path, static_cast<DWORD>(buf.size()), buf.data(), nullptr);
+    p->scratch = (n > 0 && n < buf.size()) ? std::string(buf.data(), n) : std::string();
+    return p->scratch.c_str();
+}
+
 #include "legacy_dm_generated.inc"
