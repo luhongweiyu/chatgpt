@@ -98,6 +98,7 @@ struct DmImpl {
     std::string pic_password;
     std::string dict_password;
     bool param64_to_pointer = false;
+    std::string memory_find_result_file;
 };
 
 
@@ -641,6 +642,325 @@ bool ResolveAddressExprCompat(DmImpl *p, long hwnd_or_pid, PCSTR expr, LONGLONG 
     if (!ok) return false;
     out = static_cast<LONGLONG>(value);
     return true;
+}
+
+
+struct MemoryBytePatternCompat {
+    std::vector<unsigned char> bytes;
+    std::vector<unsigned char> mask;
+
+    bool empty() const { return bytes.empty(); }
+    size_t size() const { return bytes.size(); }
+
+    bool Match(const unsigned char *p) const {
+        for (size_t i = 0; i < bytes.size(); ++i) {
+            if (mask[i] && p[i] != bytes[i]) return false;
+        }
+        return true;
+    }
+};
+
+bool ParseMemoryPatternCompat(PCSTR text, MemoryBytePatternCompat &out) {
+    out = {};
+    if (!text) return false;
+    std::istringstream iss(text);
+    std::string token;
+    while (iss >> token) {
+        if (token == "??") {
+            out.bytes.push_back(0);
+            out.mask.push_back(0);
+            continue;
+        }
+        if (token.size() != 2 ||
+            !std::isxdigit(static_cast<unsigned char>(token[0])) ||
+            !std::isxdigit(static_cast<unsigned char>(token[1]))) {
+            return false;
+        }
+        char *end = nullptr;
+        const unsigned long v = std::strtoul(token.c_str(), &end, 16);
+        if (!end || *end != '\0' || v > 0xff) return false;
+        out.bytes.push_back(static_cast<unsigned char>(v));
+        out.mask.push_back(1);
+    }
+    return !out.empty();
+}
+
+bool ParseHexU64Compat(const std::string &text, ULONGLONG &value) {
+    if (text.empty()) return false;
+    char *end = nullptr;
+    value = std::strtoull(text.c_str(), &end, 16);
+    return end && *end == '\0';
+}
+
+bool ParseMemoryRangeCompat(PCSTR text, ULONGLONG &begin, ULONGLONG &end) {
+    if (!text) return false;
+    std::string v(text);
+    v.erase(std::remove_if(v.begin(), v.end(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    }), v.end());
+    const size_t dash = v.find('-');
+    if (dash == std::string::npos || v.find('-', dash + 1) != std::string::npos)
+        return false;
+    if (!ParseHexU64Compat(v.substr(0, dash), begin) ||
+        !ParseHexU64Compat(v.substr(dash + 1), end))
+        return false;
+    return begin <= end;
+}
+
+std::vector<ULONGLONG> ParseAddressListCompat(const std::string &text) {
+    std::vector<ULONGLONG> out;
+    size_t begin = 0;
+    while (begin <= text.size()) {
+        size_t sep = text.find('|', begin);
+        std::string token = text.substr(
+            begin, sep == std::string::npos ? std::string::npos : sep - begin);
+        token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char c) {
+            return std::isspace(c) != 0;
+        }), token.end());
+        ULONGLONG value = 0;
+        if (!token.empty() && ParseHexU64Compat(token, value))
+            out.push_back(value);
+        if (sep == std::string::npos) break;
+        begin = sep + 1;
+    }
+    return out;
+}
+
+bool IsReadableProtectCompat(DWORD protect) {
+    if (protect & (PAGE_GUARD | PAGE_NOACCESS)) return false;
+    const DWORD p = protect & 0xff;
+    return p == PAGE_READONLY ||
+           p == PAGE_READWRITE ||
+           p == PAGE_WRITECOPY ||
+           p == PAGE_EXECUTE_READ ||
+           p == PAGE_EXECUTE_READWRITE ||
+           p == PAGE_EXECUTE_WRITECOPY;
+}
+
+bool IsWritableProtectCompat(DWORD protect) {
+    if (protect & (PAGE_GUARD | PAGE_NOACCESS)) return false;
+    const DWORD p = protect & 0xff;
+    return p == PAGE_READWRITE ||
+           p == PAGE_WRITECOPY ||
+           p == PAGE_EXECUTE_READWRITE ||
+           p == PAGE_EXECUTE_WRITECOPY;
+}
+
+bool MemoryRegionAllowedCompat(const MEMORY_BASIC_INFORMATION &mbi, long mode) {
+    if (mbi.State != MEM_COMMIT || !IsReadableProtectCompat(mbi.Protect))
+        return false;
+    const bool include_mapped = (mode & 16) != 0;
+    const bool writable_only = (mode & 1) != 0;
+    if (!include_mapped && mbi.Type == MEM_MAPPED) return false;
+    if (writable_only && !IsWritableProtectCompat(mbi.Protect)) return false;
+    return true;
+}
+
+std::string FormatMemoryAddressCompat(ULONGLONG address) {
+    char buf[32]{};
+    std::snprintf(buf, sizeof(buf), "%llX",
+                  static_cast<unsigned long long>(address));
+    return buf;
+}
+
+std::string JoinMemoryAddressesCompat(const std::vector<ULONGLONG> &addresses) {
+    std::string out;
+    for (size_t i = 0; i < addresses.size(); ++i) {
+        if (i) out.push_back('|');
+        out += FormatMemoryAddressCompat(addresses[i]);
+    }
+    return out;
+}
+
+std::string ResolveMemoryResultFileCompat(DmImpl *p, PCSTR file) {
+    if (!p || !file || !*file) return {};
+    std::filesystem::path path(file);
+    if (path.is_relative()) {
+        std::filesystem::path base(
+            p->global_path.empty() ? ModuleDirectoryCompat(false) : p->global_path);
+        path = base / path;
+    }
+    return path.lexically_normal().string();
+}
+
+std::string ReadWholeFileCompat(const std::string &file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return {};
+    return std::string(
+        std::istreambuf_iterator<char>(in),
+        std::istreambuf_iterator<char>());
+}
+
+bool WriteWholeFileCompat(const std::string &file, const std::string &data) {
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    return out.good();
+}
+
+template <class Matcher>
+std::vector<ULONGLONG> ScanMemoryCompat(
+    DmImpl *p,
+    long hwnd_or_pid,
+    PCSTR addr_range,
+    size_t value_size,
+    long step,
+    long mode,
+    Matcher matcher) {
+
+    std::vector<ULONGLONG> results;
+    if (!p || !addr_range || value_size == 0 || step <= 0) {
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return results;
+    }
+
+    const DWORD pid = ResolvePid(p, hwnd_or_pid);
+    if (!pid) return results;
+
+    HANDLE process = ::OpenProcess(
+        PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+    if (!process) {
+        SetNativeError(p, static_cast<long>(::GetLastError()));
+        return results;
+    }
+
+    ULONGLONG range_begin = 0, range_end = 0;
+    const bool is_range = ParseMemoryRangeCompat(
+        addr_range, range_begin, range_end);
+
+    std::string list_text;
+    if (!is_range && !p->memory_find_result_file.empty())
+        list_text = ReadWholeFileCompat(p->memory_find_result_file);
+    else if (!is_range)
+        list_text = addr_range;
+
+    if (!is_range) {
+        const auto addresses = ParseAddressListCompat(list_text);
+        std::vector<unsigned char> value(value_size);
+        for (ULONGLONG address : addresses) {
+            SIZE_T got = 0;
+            if (::ReadProcessMemory(
+                    process,
+                    reinterpret_cast<LPCVOID>(static_cast<ULONG_PTR>(address)),
+                    value.data(), value.size(), &got) &&
+                got == value.size() &&
+                matcher(value.data())) {
+                results.push_back(address);
+            }
+        }
+        ::CloseHandle(process);
+        SetNativeError(p, 0);
+        return results;
+    }
+
+    SYSTEM_INFO si{};
+    ::GetSystemInfo(&si);
+    const ULONGLONG max_address =
+        static_cast<ULONGLONG>(
+            reinterpret_cast<ULONG_PTR>(si.lpMaximumApplicationAddress));
+    range_end = (std::min)(range_end, max_address);
+    if (range_begin > range_end) {
+        ::CloseHandle(process);
+        SetNativeError(p, 0);
+        return results;
+    }
+
+    constexpr SIZE_T kChunk = 1024 * 1024;
+    ULONGLONG cursor = range_begin;
+
+    while (cursor <= range_end) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        const SIZE_T q = ::VirtualQueryEx(
+            process,
+            reinterpret_cast<LPCVOID>(static_cast<ULONG_PTR>(cursor)),
+            &mbi, sizeof(mbi));
+        if (!q) {
+            const ULONGLONG next =
+                cursor + static_cast<ULONGLONG>(si.dwPageSize);
+            if (next <= cursor) break;
+            cursor = next;
+            continue;
+        }
+
+        const ULONGLONG region_begin =
+            static_cast<ULONGLONG>(
+                reinterpret_cast<ULONG_PTR>(mbi.BaseAddress));
+        const ULONGLONG region_size =
+            static_cast<ULONGLONG>(mbi.RegionSize);
+        const ULONGLONG region_end =
+            region_size && region_begin <= ULLONG_MAX - region_size
+                ? region_begin + region_size - 1
+                : ULLONG_MAX;
+
+        const ULONGLONG scan_begin = (std::max)(range_begin, region_begin);
+        const ULONGLONG scan_end = (std::min)(range_end, region_end);
+
+        if (scan_begin <= scan_end && MemoryRegionAllowedCompat(mbi, mode)) {
+            ULONGLONG chunk_begin = scan_begin;
+            while (chunk_begin <= scan_end) {
+                const ULONGLONG remaining = scan_end - chunk_begin + 1;
+                const SIZE_T request = static_cast<SIZE_T>(
+                    (std::min<ULONGLONG>)(
+                        remaining,
+                        static_cast<ULONGLONG>(kChunk + value_size - 1)));
+
+                std::vector<unsigned char> buffer(request);
+                SIZE_T got = 0;
+                if (::ReadProcessMemory(
+                        process,
+                        reinterpret_cast<LPCVOID>(
+                            static_cast<ULONG_PTR>(chunk_begin)),
+                        buffer.data(), buffer.size(), &got) &&
+                    got >= value_size) {
+
+                    ULONGLONG candidate = chunk_begin;
+                    const ULONGLONG rem =
+                        (candidate - range_begin) %
+                        static_cast<ULONGLONG>(step);
+                    if (rem)
+                        candidate += static_cast<ULONGLONG>(step) - rem;
+
+                    const ULONGLONG got_end =
+                        chunk_begin + static_cast<ULONGLONG>(got) - 1;
+
+                    while (candidate <= got_end &&
+                           candidate <= scan_end &&
+                           value_size - 1 <= got_end - candidate) {
+                        const size_t offset =
+                            static_cast<size_t>(candidate - chunk_begin);
+                        if (matcher(buffer.data() + offset))
+                            results.push_back(candidate);
+                        if (candidate > ULLONG_MAX -
+                                static_cast<ULONGLONG>(step))
+                            break;
+                        candidate += static_cast<ULONGLONG>(step);
+                    }
+                }
+
+                if (remaining <= kChunk) break;
+                if (chunk_begin > ULLONG_MAX - kChunk) break;
+                chunk_begin += kChunk;
+            }
+        }
+
+        if (region_end == ULLONG_MAX || region_end < cursor) break;
+        cursor = region_end + 1;
+    }
+
+    ::CloseHandle(process);
+    SetNativeError(p, 0);
+    return results;
+}
+
+std::string FinalizeMemoryFindCompat(
+    DmImpl *p, const std::vector<ULONGLONG> &addresses) {
+    if (!p) return {};
+    std::string result = JoinMemoryAddressesCompat(addresses);
+    if (!p->memory_find_result_file.empty()) {
+        if (!WriteWholeFileCompat(p->memory_find_result_file, result))
+            SetNativeError(p, ERROR_WRITE_FAULT);
+    }
+    return result;
 }
 
 std::wstring AcpToWideCompat(PCSTR s) {
