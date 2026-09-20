@@ -7,7 +7,8 @@
 #include <windows.h>
 #include <winternl.h>
 #include <tlhelp32.h>
-#include <psapi.h>\n#include <wincrypt.h>
+#include <psapi.h>
+#include <wincrypt.h>
 
 #include <algorithm>
 #include <cctype>
