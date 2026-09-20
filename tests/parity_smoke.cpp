@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -311,6 +312,127 @@ void test_memory(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("FreeProcessMemory",
            old_dm.FreeProcessMemory(pid),
            new_dm.FreeProcessMemory(pid));
+
+
+    auto hex_addr = [](const void *ptr) {
+        char buf[32]{};
+        std::snprintf(buf, sizeof(buf), "%llX",
+            static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(ptr)));
+        return std::string(buf);
+    };
+
+    std::int32_t old_expr_i = 0x24681357;
+    std::int32_t new_expr_i = 0x24681357;
+    const std::string old_expr_addr = hex_addr(&old_expr_i);
+    const std::string new_expr_addr = hex_addr(&new_expr_i);
+    eq_num("ReadInt-expr-absolute",
+           old_dm.ReadInt(pid, old_expr_addr.c_str(), 0),
+           new_dm.ReadInt(pid, new_expr_addr.c_str(), 0));
+    eq_num("WriteInt-expr-ret",
+           old_dm.WriteInt(pid, old_expr_addr.c_str(), 0, 0x11223344),
+           new_dm.WriteInt(pid, new_expr_addr.c_str(), 0, 0x11223344));
+    eq_num("WriteInt-expr-value", old_expr_i, new_expr_i);
+
+    std::int32_t old_pointer_value = 0x55667711;
+    std::int32_t new_pointer_value = 0x55667711;
+    ULONG_PTR old_p1 = reinterpret_cast<ULONG_PTR>(&old_pointer_value);
+    ULONG_PTR new_p1 = reinterpret_cast<ULONG_PTR>(&new_pointer_value);
+    ULONG_PTR old_p2 = reinterpret_cast<ULONG_PTR>(&old_p1);
+    ULONG_PTR new_p2 = reinterpret_cast<ULONG_PTR>(&new_p1);
+
+    const std::string old_one = "[" + hex_addr(&old_p1) + "]";
+    const std::string new_one = "[" + hex_addr(&new_p1) + "]";
+    eq_num("ReadInt-expr-pointer1",
+           old_dm.ReadInt(pid, old_one.c_str(), 0),
+           new_dm.ReadInt(pid, new_one.c_str(), 0));
+
+    const std::string old_two = "[[" + hex_addr(&old_p2) + "]]";
+    const std::string new_two = "[[" + hex_addr(&new_p2) + "]]";
+    eq_num("ReadInt-expr-pointer2",
+           old_dm.ReadInt(pid, old_two.c_str(), 0),
+           new_dm.ReadInt(pid, new_two.c_str(), 0));
+
+    static std::int32_t module_value = 0x13579BDF;
+    char module_path[MAX_PATH]{};
+    ::GetModuleFileNameA(nullptr, module_path, MAX_PATH);
+    const char *module_name = std::strrchr(module_path, '\\');
+    module_name = module_name ? module_name + 1 : module_path;
+    const ULONG_PTR module_base = reinterpret_cast<ULONG_PTR>(::GetModuleHandleA(nullptr));
+    const ULONG_PTR module_offset = reinterpret_cast<ULONG_PTR>(&module_value) - module_base;
+    char module_expr[512]{};
+    std::snprintf(module_expr, sizeof(module_expr), "<%s>+%llX", module_name,
+                  static_cast<unsigned long long>(module_offset));
+    eq_num("ReadInt-expr-module",
+           old_dm.ReadInt(pid, module_expr, 0),
+           new_dm.ReadInt(pid, module_expr, 0));
+
+    float old_expr_f = 7.25f, new_expr_f = 7.25f;
+    eq_num("ReadFloat-expr",
+           old_dm.ReadFloat(pid, hex_addr(&old_expr_f).c_str()),
+           new_dm.ReadFloat(pid, hex_addr(&new_expr_f).c_str()));
+    eq_num("WriteFloat-expr-ret",
+           old_dm.WriteFloat(pid, hex_addr(&old_expr_f).c_str(), -9.5f),
+           new_dm.WriteFloat(pid, hex_addr(&new_expr_f).c_str(), -9.5f));
+    eq_num("WriteFloat-expr-value", old_expr_f, new_expr_f);
+
+    double old_expr_d = 91.125, new_expr_d = 91.125;
+    eq_num("ReadDouble-expr",
+           old_dm.ReadDouble(pid, hex_addr(&old_expr_d).c_str()),
+           new_dm.ReadDouble(pid, hex_addr(&new_expr_d).c_str()));
+    eq_num("WriteDouble-expr-ret",
+           old_dm.WriteDouble(pid, hex_addr(&old_expr_d).c_str(), -123.75),
+           new_dm.WriteDouble(pid, hex_addr(&new_expr_d).c_str(), -123.75));
+    eq_num("WriteDouble-expr-value", old_expr_d, new_expr_d);
+
+    char old_ascii[64] = "hello-memory";
+    char new_ascii[64] = "hello-memory";
+    {
+        const char *a = old_dm.ReadStringAddr(pid, reinterpret_cast<LONGLONG>(old_ascii), 0, 0);
+        const char *b = new_dm.ReadStringAddr(pid, reinterpret_cast<LONGLONG>(new_ascii), 0, 0);
+        eq_str("ReadStringAddr-ascii", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    eq_num("WriteStringAddr-ascii-ret",
+           old_dm.WriteStringAddr(pid, reinterpret_cast<LONGLONG>(old_ascii), 0, "changed"),
+           new_dm.WriteStringAddr(pid, reinterpret_cast<LONGLONG>(new_ascii), 0, "changed"));
+    eq_str("WriteStringAddr-ascii-value", old_ascii, new_ascii);
+
+    wchar_t old_wide[64] = L"wide-test";
+    wchar_t new_wide[64] = L"wide-test";
+    {
+        const char *a = old_dm.ReadStringAddr(pid, reinterpret_cast<LONGLONG>(old_wide), 1, 0);
+        const char *b = new_dm.ReadStringAddr(pid, reinterpret_cast<LONGLONG>(new_wide), 1, 0);
+        eq_str("ReadStringAddr-unicode", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    eq_num("WriteStringAddr-unicode-ret",
+           old_dm.WriteStringAddr(pid, reinterpret_cast<LONGLONG>(old_wide), 1, "wide-changed"),
+           new_dm.WriteStringAddr(pid, reinterpret_cast<LONGLONG>(new_wide), 1, "wide-changed"));
+    eq_num("WriteStringAddr-unicode-value",
+           std::wcscmp(old_wide, new_wide), 0);
+
+    unsigned char old_data_expr[8] = {1,2,3,4,5,6,7,8};
+    unsigned char new_data_expr[8] = {1,2,3,4,5,6,7,8};
+    {
+        const char *a = old_dm.ReadData(pid, hex_addr(old_data_expr).c_str(), 8);
+        const char *b = new_dm.ReadData(pid, hex_addr(new_data_expr).c_str(), 8);
+        eq_str("ReadData-expr", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    eq_num("WriteData-expr-ret",
+           old_dm.WriteData(pid, hex_addr(old_data_expr).c_str(), "AA BB CC DD"),
+           new_dm.WriteData(pid, hex_addr(new_data_expr).c_str(), "AA BB CC DD"));
+    eq_num("WriteData-expr-value",
+           std::memcmp(old_data_expr, new_data_expr, sizeof(old_data_expr)), 0);
+
+    char old_string_expr[64] = "expr-string";
+    char new_string_expr[64] = "expr-string";
+    {
+        const char *a = old_dm.ReadString(pid, hex_addr(old_string_expr).c_str(), 0, 0);
+        const char *b = new_dm.ReadString(pid, hex_addr(new_string_expr).c_str(), 0, 0);
+        eq_str("ReadString-expr", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    eq_num("WriteString-expr-ret",
+           old_dm.WriteString(pid, hex_addr(old_string_expr).c_str(), 0, "expr-new"),
+           new_dm.WriteString(pid, hex_addr(new_string_expr).c_str(), 0, "expr-new"));
+    eq_str("WriteString-expr-value", old_string_expr, new_string_expr);
 
     if (old_page) ::VirtualFree(old_page, 0, MEM_RELEASE);
     if (new_page) ::VirtualFree(new_page, 0, MEM_RELEASE);
