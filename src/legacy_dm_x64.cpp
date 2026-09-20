@@ -1753,6 +1753,114 @@ bool MatchShapeAtCompat(
     return true;
 }
 
+
+std::filesystem::path ResolveObjectFilePathCompat(DmImpl *p, PCSTR file) {
+    if (!file || !*file) return {};
+    std::filesystem::path path(file);
+    if (path.is_absolute()) return path;
+    if (p && !p->global_path.empty())
+        return std::filesystem::path(p->global_path) / path;
+    return std::filesystem::path(ModuleDirectoryCompat(false)) / path;
+}
+
+bool WriteBmp24Compat(
+    const std::filesystem::path &path,
+    const ScreenImageCompat &image) {
+    if (image.width <= 0 || image.height <= 0 || image.pixels.empty())
+        return false;
+
+    const DWORD row_bytes =
+        static_cast<DWORD>(((static_cast<unsigned long long>(image.width) * 3ULL + 3ULL) / 4ULL) * 4ULL);
+    const unsigned long long pixel_bytes =
+        static_cast<unsigned long long>(row_bytes) * static_cast<unsigned long long>(image.height);
+    if (pixel_bytes > std::numeric_limits<DWORD>::max()) return false;
+
+    BITMAPFILEHEADER file_header{};
+    BITMAPINFOHEADER info_header{};
+    info_header.biSize = sizeof(info_header);
+    info_header.biWidth = image.width;
+    info_header.biHeight = image.height;
+    info_header.biPlanes = 1;
+    info_header.biBitCount = 24;
+    info_header.biCompression = BI_RGB;
+    info_header.biSizeImage = static_cast<DWORD>(pixel_bytes);
+
+    file_header.bfType = 0x4D42;
+    file_header.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    file_header.bfSize = file_header.bfOffBits + info_header.biSizeImage;
+
+    std::error_code ec;
+    if (path.has_parent_path())
+        std::filesystem::create_directories(path.parent_path(), ec);
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(reinterpret_cast<const char *>(&file_header), sizeof(file_header));
+    out.write(reinterpret_cast<const char *>(&info_header), sizeof(info_header));
+
+    std::vector<unsigned char> row(row_bytes, 0);
+    for (long y = image.height - 1; y >= 0; --y) {
+        std::fill(row.begin(), row.end(), 0);
+        for (long x = 0; x < image.width; ++x) {
+            const auto &c = image.pixels[
+                static_cast<size_t>(y) * static_cast<size_t>(image.width) +
+                static_cast<size_t>(x)];
+            row[static_cast<size_t>(x) * 3 + 0] = c.b;
+            row[static_cast<size_t>(x) * 3 + 1] = c.g;
+            row[static_cast<size_t>(x) * 3 + 2] = c.r;
+        }
+        out.write(reinterpret_cast<const char *>(row.data()), row.size());
+    }
+    return out.good();
+}
+
+std::vector<long> BuildColorIntegralCompat(
+    const ScreenImageCompat &image,
+    const ColorSpecCompat &spec,
+    double sim) {
+    const long w = image.width;
+    const long h = image.height;
+    std::vector<long> integral(
+        static_cast<size_t>(w + 1) * static_cast<size_t>(h + 1), 0);
+
+    for (long y = 0; y < h; ++y) {
+        long row_sum = 0;
+        for (long x = 0; x < w; ++x) {
+            if (MatchColorSpecCompat(
+                    image.pixels[
+                        static_cast<size_t>(y) * static_cast<size_t>(w) +
+                        static_cast<size_t>(x)],
+                    spec, sim))
+                ++row_sum;
+            integral[
+                static_cast<size_t>(y + 1) * static_cast<size_t>(w + 1) +
+                static_cast<size_t>(x + 1)] =
+                integral[
+                    static_cast<size_t>(y) * static_cast<size_t>(w + 1) +
+                    static_cast<size_t>(x + 1)] +
+                row_sum;
+        }
+    }
+    return integral;
+}
+
+long IntegralRectCountCompat(
+    const std::vector<long> &integral,
+    long stride,
+    long x,
+    long y,
+    long width,
+    long height) {
+    const long x2 = x + width;
+    const long y2 = y + height;
+    const auto at = [&](long px, long py) -> long {
+        return integral[
+            static_cast<size_t>(py) * static_cast<size_t>(stride) +
+            static_cast<size_t>(px)];
+    };
+    return at(x2, y2) - at(x, y2) - at(x2, y) + at(x, y);
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -3910,6 +4018,82 @@ long dmsoft::FindMulColor(
         if (!found) return 0;
     }
     return 1;
+}
+
+
+
+long dmsoft::FindColorBlock(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim, long count, long width, long height,
+    long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y || count < 0 || width <= 0 || height <= 0) return 0;
+
+    ColorSpecCompat spec{};
+    ScreenImageCompat image;
+    if (!ParseColorSpecCompat(color, spec) ||
+        !CaptureScreenRegionCompat(x1, y1, x2, y2, image) ||
+        width > image.width || height > image.height)
+        return 0;
+
+    const auto integral = BuildColorIntegralCompat(image, spec, sim);
+    const long stride = image.width + 1;
+    for (long py = 0; py <= image.height - height; ++py) {
+        for (long px = 0; px <= image.width - width; ++px) {
+            if (IntegralRectCountCompat(
+                    integral, stride, px, py, width, height) >= count) {
+                *x = x1 + px;
+                *y = y1 + py;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+const char *dmsoft::FindColorBlockEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim, long count, long width, long height) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch.clear();
+    if (count < 0 || width <= 0 || height <= 0) return p->scratch.c_str();
+
+    ColorSpecCompat spec{};
+    ScreenImageCompat image;
+    if (!ParseColorSpecCompat(color, spec) ||
+        !CaptureScreenRegionCompat(x1, y1, x2, y2, image) ||
+        width > image.width || height > image.height)
+        return p->scratch.c_str();
+
+    const auto integral = BuildColorIntegralCompat(image, spec, sim);
+    const long stride = image.width + 1;
+    std::ostringstream oss;
+    long found = 0;
+    for (long py = 0; py <= image.height - height && found < 1800; ++py) {
+        for (long px = 0; px <= image.width - width && found < 1800; ++px) {
+            if (IntegralRectCountCompat(
+                    integral, stride, px, py, width, height) < count)
+                continue;
+            if (found) oss << '|';
+            oss << (x1 + px) << ',' << (y1 + py);
+            ++found;
+        }
+    }
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::Capture(
+    long x1, long y1, long x2, long y2, PCSTR file) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    const auto path = ResolveObjectFilePathCompat(p, file);
+    if (path.empty()) return 0;
+    return WriteBmp24Compat(path, image) ? 1 : 0;
 }
 
 #include "legacy_dm_generated.inc"
