@@ -5992,4 +5992,245 @@ long dmsoft::SetParam64ToPointer() {
     return 1;
 }
 
+
+long dmsoft::SetMemoryFindResultToFile(PCSTR file) {
+    auto *p = P(impl);
+    if (!p || !file) return 0;
+    if (!*file) {
+        p->memory_find_result_file.clear();
+        return 1;
+    }
+    const std::string resolved = ResolveMemoryResultFileCompat(p, file);
+    if (resolved.empty()) return 0;
+    p->memory_find_result_file = resolved;
+    return 1;
+}
+
+const char *dmsoft::FindIntEx(
+    long hwnd, PCSTR addr_range,
+    LONGLONG int_value_min, LONGLONG int_value_max,
+    long type, long step, long multi_thread, long mode) {
+
+    auto *p = P(impl);
+    if (!p) return "";
+    (void)multi_thread;
+
+    if (int_value_min > int_value_max) {
+        p->scratch.clear();
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return p->scratch.c_str();
+    }
+
+    size_t size = 0;
+    switch (type) {
+    case 0: size = sizeof(std::int32_t); break;
+    case 1: size = sizeof(std::int16_t); break;
+    case 2: size = sizeof(std::int8_t); break;
+    case 3: size = sizeof(std::int64_t); break;
+    default:
+        p->scratch.clear();
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return p->scratch.c_str();
+    }
+
+    auto match = [=](const unsigned char *data) -> bool {
+        LONGLONG value = 0;
+        switch (type) {
+        case 0: {
+            std::int32_t v = 0;
+            std::memcpy(&v, data, sizeof(v));
+            value = v;
+            break;
+        }
+        case 1: {
+            std::int16_t v = 0;
+            std::memcpy(&v, data, sizeof(v));
+            value = v;
+            break;
+        }
+        case 2: {
+            std::int8_t v = 0;
+            std::memcpy(&v, data, sizeof(v));
+            value = v;
+            break;
+        }
+        case 3: {
+            std::int64_t v = 0;
+            std::memcpy(&v, data, sizeof(v));
+            value = v;
+            break;
+        }
+        }
+        return value >= int_value_min && value <= int_value_max;
+    };
+
+    const auto results = ScanMemoryCompat(
+        p, hwnd, addr_range, size, step, mode, match);
+    p->scratch = FinalizeMemoryFindCompat(p, results);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindInt(
+    long hwnd, PCSTR addr_range,
+    LONGLONG int_value_min, LONGLONG int_value_max, long type) {
+    return FindIntEx(
+        hwnd, addr_range, int_value_min, int_value_max,
+        type, 1, 1, 0);
+}
+
+const char *dmsoft::FindFloatEx(
+    long hwnd, PCSTR addr_range,
+    float float_value_min, float float_value_max,
+    long step, long multi_thread, long mode) {
+
+    auto *p = P(impl);
+    if (!p) return "";
+    (void)multi_thread;
+    if (!(float_value_min <= float_value_max)) {
+        p->scratch.clear();
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return p->scratch.c_str();
+    }
+
+    auto match = [=](const unsigned char *data) {
+        float value = 0.0f;
+        std::memcpy(&value, data, sizeof(value));
+        return !std::isnan(value) &&
+               value >= float_value_min &&
+               value <= float_value_max;
+    };
+
+    const auto results = ScanMemoryCompat(
+        p, hwnd, addr_range, sizeof(float), step, mode, match);
+    p->scratch = FinalizeMemoryFindCompat(p, results);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindFloat(
+    long hwnd, PCSTR addr_range,
+    float float_value_min, float float_value_max) {
+    return FindFloatEx(
+        hwnd, addr_range, float_value_min, float_value_max,
+        1, 1, 0);
+}
+
+const char *dmsoft::FindDoubleEx(
+    long hwnd, PCSTR addr_range,
+    double double_value_min, double double_value_max,
+    long step, long multi_thread, long mode) {
+
+    auto *p = P(impl);
+    if (!p) return "";
+    (void)multi_thread;
+    if (!(double_value_min <= double_value_max)) {
+        p->scratch.clear();
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return p->scratch.c_str();
+    }
+
+    auto match = [=](const unsigned char *data) {
+        double value = 0.0;
+        std::memcpy(&value, data, sizeof(value));
+        return !std::isnan(value) &&
+               value >= double_value_min &&
+               value <= double_value_max;
+    };
+
+    const auto results = ScanMemoryCompat(
+        p, hwnd, addr_range, sizeof(double), step, mode, match);
+    p->scratch = FinalizeMemoryFindCompat(p, results);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindDouble(
+    long hwnd, PCSTR addr_range,
+    double double_value_min, double double_value_max) {
+    return FindDoubleEx(
+        hwnd, addr_range, double_value_min, double_value_max,
+        1, 1, 0);
+}
+
+const char *dmsoft::FindDataEx(
+    long hwnd, PCSTR addr_range, PCSTR data,
+    long step, long multi_thread, long mode) {
+
+    auto *p = P(impl);
+    if (!p) return "";
+    (void)multi_thread;
+
+    MemoryBytePatternCompat pattern;
+    if (!ParseMemoryPatternCompat(data, pattern)) {
+        p->scratch.clear();
+        SetNativeError(p, ERROR_INVALID_DATA);
+        return p->scratch.c_str();
+    }
+
+    auto match = [&pattern](const unsigned char *value) {
+        return pattern.Match(value);
+    };
+    const auto results = ScanMemoryCompat(
+        p, hwnd, addr_range, pattern.size(), step, mode, match);
+    p->scratch = FinalizeMemoryFindCompat(p, results);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindData(
+    long hwnd, PCSTR addr_range, PCSTR data) {
+    return FindDataEx(hwnd, addr_range, data, 1, 1, 0);
+}
+
+const char *dmsoft::FindStringEx(
+    long hwnd, PCSTR addr_range, PCSTR string_value,
+    long type, long step, long multi_thread, long mode) {
+
+    auto *p = P(impl);
+    if (!p || !string_value) return "";
+    (void)multi_thread;
+
+    std::vector<unsigned char> pattern;
+    if (type == 0) {
+        const size_t n = std::strlen(string_value);
+        pattern.assign(
+            reinterpret_cast<const unsigned char *>(string_value),
+            reinterpret_cast<const unsigned char *>(string_value) + n);
+    } else if (type == 1) {
+        std::wstring wide = AcpToWideCompat(string_value);
+        if (!wide.empty() && wide.back() == L'\0') wide.pop_back();
+        const auto *begin =
+            reinterpret_cast<const unsigned char *>(wide.data());
+        pattern.assign(
+            begin, begin + wide.size() * sizeof(wchar_t));
+    } else if (type == 2) {
+        const std::string utf8 = AcpToUtf8Compat(string_value);
+        pattern.assign(
+            reinterpret_cast<const unsigned char *>(utf8.data()),
+            reinterpret_cast<const unsigned char *>(utf8.data()) +
+                utf8.size());
+    } else {
+        p->scratch.clear();
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return p->scratch.c_str();
+    }
+
+    if (pattern.empty()) {
+        p->scratch.clear();
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return p->scratch.c_str();
+    }
+
+    auto match = [&pattern](const unsigned char *value) {
+        return std::memcmp(value, pattern.data(), pattern.size()) == 0;
+    };
+    const auto results = ScanMemoryCompat(
+        p, hwnd, addr_range, pattern.size(), step, mode, match);
+    p->scratch = FinalizeMemoryFindCompat(p, results);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindString(
+    long hwnd, PCSTR addr_range, PCSTR string_value, long type) {
+    return FindStringEx(
+        hwnd, addr_range, string_value, type, 1, 1, 0);
+}
+
 #include "legacy_dm_generated.inc"
