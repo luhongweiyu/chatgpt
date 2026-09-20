@@ -362,10 +362,10 @@ long dmsoft::GetScreenDepth() {
 
 long dmsoft::GetDPI() {
     HDC dc = ::GetDC(nullptr);
-    if (!dc) return 96;
+    if (!dc) return 0;
     const int dpi = ::GetDeviceCaps(dc, LOGPIXELSX);
     ::ReleaseDC(nullptr, dc);
-    return static_cast<long>(dpi > 0 ? dpi : 96);
+    return dpi == 96 ? 1 : 0;
 }
 
 long dmsoft::IsFileExist(PCSTR file) {
@@ -823,9 +823,6 @@ const char *dmsoft::IntToData(LONGLONG int_value, long type) {
     case 1: { std::int16_t v = static_cast<std::int16_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
     case 2: { std::int8_t  v = static_cast<std::int8_t>(int_value);  p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
     case 3: { std::int64_t v = static_cast<std::int64_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
-    case 4: { std::uint32_t v = static_cast<std::uint32_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
-    case 5: { std::uint16_t v = static_cast<std::uint16_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
-    case 6: { std::uint8_t  v = static_cast<std::uint8_t>(int_value);  p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
     default: p->scratch.clear(); break;
     }
     return p->scratch.c_str();
@@ -852,7 +849,7 @@ const char *dmsoft::StringToData(PCSTR string_value, long type) {
         p->scratch = HexBytesCompat(string_value, std::strlen(string_value));
         return p->scratch.c_str();
     }
-    if (type == 1) {
+    if (type == 1 || type == 2) {
         const int count = ::MultiByteToWideChar(CP_ACP, 0, string_value, -1, nullptr, 0);
         if (count <= 0) { p->scratch.clear(); return p->scratch.c_str(); }
         std::wstring wide(static_cast<size_t>(count), L'\0');
@@ -861,7 +858,17 @@ const char *dmsoft::StringToData(PCSTR string_value, long type) {
             return p->scratch.c_str();
         }
         if (!wide.empty() && wide.back() == L'\0') wide.pop_back();
-        p->scratch = HexBytesCompat(wide.data(), wide.size() * sizeof(wchar_t));
+        if (type == 1) {
+            p->scratch = HexBytesCompat(wide.data(), wide.size() * sizeof(wchar_t));
+            return p->scratch.c_str();
+        }
+        const int utf8_len = ::WideCharToMultiByte(CP_UTF8, 0, wide.data(),
+            static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+        if (utf8_len <= 0) { p->scratch.clear(); return p->scratch.c_str(); }
+        std::string utf8(static_cast<size_t>(utf8_len), '\0');
+        ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()),
+            utf8.data(), utf8_len, nullptr, nullptr);
+        p->scratch = HexBytesCompat(utf8.data(), utf8.size());
         return p->scratch.c_str();
     }
     p->scratch.clear();
@@ -869,17 +876,21 @@ const char *dmsoft::StringToData(PCSTR string_value, long type) {
 }
 
 long dmsoft::GetLocale() {
-    return static_cast<long>(::GetThreadLocale());
+    return ::GetACP() == 936 ? 1 : 0;
 }
 
 long dmsoft::CheckUAC() {
-    HANDLE token = nullptr;
-    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token)) return 0;
-    TOKEN_ELEVATION elevation{};
-    DWORD cb = sizeof(elevation);
-    const BOOL ok = ::GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &cb);
-    ::CloseHandle(token);
-    return ok ? (elevation.TokenIsElevated ? 1 : 0) : 0;
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    const LSTATUS st = ::RegGetValueA(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        "EnableLUA",
+        RRF_RT_REG_DWORD,
+        nullptr,
+        &value,
+        &size);
+    return st == ERROR_SUCCESS && value != 0 ? 1 : 0;
 }
 
 #include "legacy_dm_generated.inc"
