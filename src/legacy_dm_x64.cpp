@@ -1600,6 +1600,159 @@ bool ForEachPointInDirectionCompat(
     }
 }
 
+
+struct SignedColorRuleCompat {
+    bool negative = false;
+    ColorRuleCompat rule;
+};
+
+struct MultiColorOffsetCompat {
+    long dx = 0;
+    long dy = 0;
+    std::vector<SignedColorRuleCompat> rules;
+};
+
+bool ParseSignedColorRuleCompat(const std::string &text, SignedColorRuleCompat &out) {
+    if (text.empty()) return false;
+    std::string value = text;
+    if (!value.empty() && value.front() == '-') {
+        out.negative = true;
+        value.erase(value.begin());
+    }
+    if (value.empty()) return false;
+
+    const size_t dash = value.find('-');
+    const std::string color_text =
+        dash == std::string::npos ? value : value.substr(0, dash);
+    const std::string diff_text =
+        dash == std::string::npos ? std::string() : value.substr(dash + 1);
+
+    if (!ParseRgbHexCompat(color_text, out.rule.color)) return false;
+    if (!diff_text.empty()) {
+        if (!ParseRgbHexCompat(diff_text, out.rule.diff)) return false;
+        out.rule.explicit_diff = true;
+    }
+    return true;
+}
+
+bool ParseMultiColorOffsetsCompat(PCSTR text, std::vector<MultiColorOffsetCompat> &out) {
+    out.clear();
+    if (!text || !*text) return true;
+
+    const auto entries = SplitCompat(text, ',');
+    for (const auto &entry : entries) {
+        if (entry.empty()) continue;
+        const auto parts = SplitCompat(entry, '|');
+        if (parts.size() < 3) return false;
+
+        MultiColorOffsetCompat item{};
+        if (!ParseLongCompat(parts[0], item.dx) ||
+            !ParseLongCompat(parts[1], item.dy))
+            return false;
+
+        for (size_t i = 2; i < parts.size(); ++i) {
+            SignedColorRuleCompat rule{};
+            if (!ParseSignedColorRuleCompat(parts[i], rule)) return false;
+            item.rules.push_back(rule);
+        }
+        if (item.rules.empty()) return false;
+        out.push_back(std::move(item));
+    }
+    return true;
+}
+
+bool MatchSignedColorRulesCompat(
+    const RgbColorCompat &actual,
+    const std::vector<SignedColorRuleCompat> &rules,
+    double sim) {
+    bool has_positive = false;
+    bool positive_match = false;
+
+    for (const auto &rule : rules) {
+        const bool matched = MatchOneColorCompat(actual, rule.rule, sim);
+        if (rule.negative) {
+            if (matched) return false;
+        } else {
+            has_positive = true;
+            if (matched) positive_match = true;
+        }
+    }
+    return has_positive ? positive_match : true;
+}
+
+bool MatchMultiColorAtCompat(
+    const ScreenImageCompat &image,
+    long x,
+    long y,
+    const ColorSpecCompat &first,
+    const std::vector<MultiColorOffsetCompat> &offsets,
+    double sim) {
+    const auto *base = image.At(x, y);
+    if (!base || !MatchColorSpecCompat(*base, first, sim)) return false;
+
+    long error_count = 0;
+    const long max_error =
+        static_cast<long>(static_cast<double>(offsets.size()) * (1.0 - std::clamp(sim, 0.0, 1.0)));
+
+    for (const auto &off : offsets) {
+        const auto *pixel = image.At(x + off.dx, y + off.dy);
+        const bool matched =
+            pixel && MatchSignedColorRulesCompat(*pixel, off.rules, sim);
+        if (!matched && ++error_count > max_error) return false;
+    }
+    return true;
+}
+
+struct ShapeOffsetCompat {
+    long dx = 0;
+    long dy = 0;
+    bool equal = false;
+};
+
+bool ParseShapeOffsetsCompat(PCSTR text, std::vector<ShapeOffsetCompat> &out) {
+    out.clear();
+    if (!text || !*text) return false;
+    const auto entries = SplitCompat(text, ',');
+    for (const auto &entry : entries) {
+        if (entry.empty()) continue;
+        const auto parts = SplitCompat(entry, '|');
+        if (parts.size() != 3) return false;
+        ShapeOffsetCompat item{};
+        long equal = 0;
+        if (!ParseLongCompat(parts[0], item.dx) ||
+            !ParseLongCompat(parts[1], item.dy) ||
+            !ParseLongCompat(parts[2], equal))
+            return false;
+        item.equal = equal != 0;
+        out.push_back(item);
+    }
+    return !out.empty();
+}
+
+bool SimilarRgbCompat(
+    const RgbColorCompat &a, const RgbColorCompat &b, double sim) {
+    ColorRuleCompat expected{};
+    expected.color = b;
+    return MatchOneColorCompat(a, expected, sim);
+}
+
+bool MatchShapeAtCompat(
+    const ScreenImageCompat &image,
+    long x,
+    long y,
+    const std::vector<ShapeOffsetCompat> &offsets,
+    double sim) {
+    const auto *base = image.At(x, y);
+    if (!base) return false;
+    for (const auto &off : offsets) {
+        const auto *pixel = image.At(x + off.dx, y + off.dy);
+        if (!pixel) return false;
+        const bool equal = SimilarRgbCompat(*pixel, *base, sim);
+        if (equal != off.equal) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -3571,6 +3724,192 @@ const char *dmsoft::FindColorEx(
         });
     p->scratch = oss.str();
     return p->scratch.c_str();
+}
+
+
+
+long dmsoft::FindMultiColor(
+    long x1, long y1, long x2, long y2,
+    PCSTR first_color, PCSTR offset_color,
+    double sim, long dir, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y) return 0;
+
+    ColorSpecCompat first{};
+    std::vector<MultiColorOffsetCompat> offsets;
+    if (!ParseColorSpecCompat(first_color, first) ||
+        !ParseMultiColorOffsetsCompat(offset_color, offsets))
+        return 0;
+
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+
+    long found_x = -1, found_y = -1;
+    const bool found = ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir, [&](long px, long py) {
+            if (MatchMultiColorAtCompat(image, px, py, first, offsets, sim)) {
+                found_x = px;
+                found_y = py;
+                return true;
+            }
+            return false;
+        });
+    if (!found) return 0;
+    *x = found_x;
+    *y = found_y;
+    return 1;
+}
+
+const char *dmsoft::FindMultiColorE(
+    long x1, long y1, long x2, long y2,
+    PCSTR first_color, PCSTR offset_color,
+    double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    FindMultiColor(
+        x1, y1, x2, y2, first_color, offset_color, sim, dir, &x, &y);
+    p->scratch = std::to_string(x) + "|" + std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindMultiColorEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR first_color, PCSTR offset_color,
+    double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    ColorSpecCompat first{};
+    std::vector<MultiColorOffsetCompat> offsets;
+    ScreenImageCompat image;
+    if (!ParseColorSpecCompat(first_color, first) ||
+        !ParseMultiColorOffsetsCompat(offset_color, offsets) ||
+        !CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::ostringstream oss;
+    long count = 0;
+    ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir, [&](long px, long py) {
+            if (!MatchMultiColorAtCompat(image, px, py, first, offsets, sim))
+                return false;
+            if (count) oss << '|';
+            oss << px << ',' << py;
+            ++count;
+            return count >= 1800;
+        });
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindShape(
+    long x1, long y1, long x2, long y2,
+    PCSTR offset_color, double sim, long dir, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y) return 0;
+
+    std::vector<ShapeOffsetCompat> offsets;
+    if (!ParseShapeOffsetsCompat(offset_color, offsets)) return 0;
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+
+    long found_x = -1, found_y = -1;
+    const bool found = ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir, [&](long px, long py) {
+            if (MatchShapeAtCompat(image, px, py, offsets, sim)) {
+                found_x = px;
+                found_y = py;
+                return true;
+            }
+            return false;
+        });
+    if (!found) return 0;
+    *x = found_x;
+    *y = found_y;
+    return 1;
+}
+
+const char *dmsoft::FindShapeE(
+    long x1, long y1, long x2, long y2,
+    PCSTR offset_color, double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    FindShape(x1, y1, x2, y2, offset_color, sim, dir, &x, &y);
+    p->scratch = std::to_string(x) + "|" + std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindShapeEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR offset_color, double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    std::vector<ShapeOffsetCompat> offsets;
+    ScreenImageCompat image;
+    if (!ParseShapeOffsetsCompat(offset_color, offsets) ||
+        !CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::ostringstream oss;
+    long count = 0;
+    ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir, [&](long px, long py) {
+            if (!MatchShapeAtCompat(image, px, py, offsets, sim))
+                return false;
+            if (count) oss << '|';
+            oss << px << ',' << py;
+            ++count;
+            return count >= 1800;
+        });
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindMulColor(
+    long x1, long y1, long x2, long y2, PCSTR color, double sim) {
+    if (!color || !*color) return 0;
+    std::string source(color);
+    bool inverse = false;
+    if (!source.empty() && source.front() == '@') {
+        inverse = true;
+        source.erase(source.begin());
+    }
+
+    const auto tokens = SplitCompat(source, '|');
+    if (tokens.empty()) return 0;
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+
+    if (inverse) {
+        ColorSpecCompat spec{};
+        if (!ParseColorSpecCompat(color, spec)) return 0;
+        for (const auto &pixel : image.pixels)
+            if (MatchColorSpecCompat(pixel, spec, sim)) return 1;
+        return 0;
+    }
+
+    for (const auto &token : tokens) {
+        ColorSpecCompat one{};
+        if (!ParseColorSpecCompat(token.c_str(), one)) return 0;
+        bool found = false;
+        for (const auto &pixel : image.pixels) {
+            if (MatchColorSpecCompat(pixel, one, sim)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return 0;
+    }
+    return 1;
 }
 
 #include "legacy_dm_generated.inc"
