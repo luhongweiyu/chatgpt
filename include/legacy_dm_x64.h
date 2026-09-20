@@ -1,4 +1,4 @@
-/** hcbyj x64 恢复版接口：保留旧 dmsoft 方法名/参数/返回类型；内部不再按 x86 RVA 跳转。 */
+/** hcbyj 源码恢复接口：保留旧 dmsoft 方法名/参数/返回类型；先以 x86 行为对齐，再用同一源码构建 x64。 */
 #pragma once
 #ifndef __INCLUDE_OBJ_H__
 #define __INCLUDE_OBJ_H__
@@ -8,9 +8,7 @@
 #include <windows.h>
 #include <cstdint>
 
-#if !defined(_WIN64)
-#error hcbyj_x64 requires a 64-bit Windows build.
-#endif
+static_assert(sizeof(long) == 4, "Legacy dmsoft ABI requires 32-bit long on Windows.");
 
 #ifdef HCBYJ64_BUILD
 #define HCBYJ64_API __declspec(dllexport)
