@@ -311,6 +311,7 @@ public:
     long SetPicPwd(PCSTR pwd) { using F=long(WINAPI*)(long,PCSTR); return at<F>(111312)(obj_,pwd); }
     long SetDictPwd(PCSTR pwd) { using F=long(WINAPI*)(long,PCSTR); return at<F>(105984)(obj_,pwd); }
     long SetParam64ToPointer() { using F=long(WINAPI*)(long); return at<F>(111200)(obj_); }
+    long IsSurrpotVt() { using F=long(WINAPI*)(long); return at<F>(101760)(obj_); }
 
 private:
     template<class T>
