@@ -4,6 +4,8 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <string>
