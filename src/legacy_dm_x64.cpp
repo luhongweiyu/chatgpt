@@ -854,8 +854,12 @@ const char *dmsoft::StringToData(PCSTR string_value, long type) {
     if (type == 1) {
         const int count = ::MultiByteToWideChar(CP_ACP, 0, string_value, -1, nullptr, 0);
         if (count <= 0) { p->scratch.clear(); return p->scratch.c_str(); }
-        std::wstring wide(static_cast<size_t>(count - 1), L'\0');
-        if (!wide.empty()) ::MultiByteToWideChar(CP_ACP, 0, string_value, -1, wide.data(), count);
+        std::wstring wide(static_cast<size_t>(count), L'\0');
+        if (::MultiByteToWideChar(CP_ACP, 0, string_value, -1, wide.data(), count) <= 0) {
+            p->scratch.clear();
+            return p->scratch.c_str();
+        }
+        if (!wide.empty() && wide.back() == L'\0') wide.pop_back();
         p->scratch = HexBytesCompat(wide.data(), wide.size() * sizeof(wchar_t));
         return p->scratch.c_str();
     }
