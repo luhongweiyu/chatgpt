@@ -66,3 +66,9 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4)
     target_link_libraries(hcbyj_parity PRIVATE hcbyj64 Dwmapi)
     target_compile_features(hcbyj_parity PRIVATE cxx_std_17)
 endif()
+
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_executable(legacy_vtable_dump tools/legacy_vtable_dump.cpp)
+    target_compile_features(legacy_vtable_dump PRIVATE cxx_std_17)
+endif()
