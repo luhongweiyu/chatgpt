@@ -10,6 +10,10 @@
 #include <psapi.h>
 #include <wincrypt.h>
 #include <shellapi.h>
+#include <wininet.h>
+#include <commdlg.h>
+#include <shobjidl.h>
+#include <shlobj.h>
 #include <winioctl.h>
 
 #include <algorithm>
@@ -1859,6 +1863,206 @@ long IntegralRectCountCompat(
             static_cast<size_t>(px)];
     };
     return at(x2, y2) - at(x, y2) - at(x2, y) + at(x, y);
+}
+
+
+bool EnableShutdownPrivilegeCompat() {
+    HANDLE token = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &token))
+        return false;
+
+    TOKEN_PRIVILEGES tp{};
+    tp.PrivilegeCount = 1;
+    if (!::LookupPrivilegeValueA(nullptr, SE_SHUTDOWN_NAME, &tp.Privileges[0].Luid)) {
+        ::CloseHandle(token);
+        return false;
+    }
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    ::SetLastError(ERROR_SUCCESS);
+    const BOOL ok = ::AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr);
+    const DWORD err = ::GetLastError();
+    ::CloseHandle(token);
+    return ok && err == ERROR_SUCCESS;
+}
+
+std::string ResolveObjectPathCompat(DmImpl *p, PCSTR path) {
+    if (!path || !*path) return {};
+    std::filesystem::path candidate(path);
+    if (candidate.is_relative() && p && !p->global_path.empty())
+        candidate = std::filesystem::path(p->global_path) / candidate;
+    std::error_code ec;
+    candidate = std::filesystem::absolute(candidate, ec);
+    if (ec) return {};
+    return candidate.lexically_normal().string();
+}
+
+long DownloadFileCompat(PCSTR url, PCSTR save_file, long timeout) {
+    if (!url || !*url || !save_file || !*save_file || timeout < 0) return -1;
+
+    std::string normalized(url);
+    if (normalized.find("://") == std::string::npos)
+        normalized = "http://" + normalized;
+
+    HINTERNET internet = ::InternetOpenA(
+        "hcbyj64", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    if (!internet) return -1;
+
+    if (timeout > 0) {
+        DWORD t = static_cast<DWORD>(timeout);
+        ::InternetSetOptionA(internet, INTERNET_OPTION_CONNECT_TIMEOUT, &t, sizeof(t));
+        ::InternetSetOptionA(internet, INTERNET_OPTION_SEND_TIMEOUT, &t, sizeof(t));
+        ::InternetSetOptionA(internet, INTERNET_OPTION_RECEIVE_TIMEOUT, &t, sizeof(t));
+    }
+
+    HINTERNET request = ::InternetOpenUrlA(
+        internet,
+        normalized.c_str(),
+        nullptr,
+        0,
+        INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
+            INTERNET_FLAG_KEEP_CONNECTION,
+        0);
+    if (!request) {
+        ::InternetCloseHandle(internet);
+        return -1;
+    }
+
+    HANDLE file = ::CreateFileA(
+        save_file, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        ::InternetCloseHandle(request);
+        ::InternetCloseHandle(internet);
+        return -2;
+    }
+
+    long result = 1;
+    std::vector<unsigned char> buffer(64 * 1024);
+    for (;;) {
+        DWORD got = 0;
+        if (!::InternetReadFile(
+                request, buffer.data(),
+                static_cast<DWORD>(buffer.size()), &got)) {
+            result = -1;
+            break;
+        }
+        if (got == 0) break;
+
+        DWORD written_total = 0;
+        while (written_total < got) {
+            DWORD written = 0;
+            if (!::WriteFile(
+                    file, buffer.data() + written_total,
+                    got - written_total, &written, nullptr) ||
+                written == 0) {
+                result = -2;
+                break;
+            }
+            written_total += written;
+        }
+        if (result != 1) break;
+    }
+
+    ::CloseHandle(file);
+    ::InternetCloseHandle(request);
+    ::InternetCloseHandle(internet);
+
+    if (result != 1) ::DeleteFileA(save_file);
+    return result;
+}
+
+std::string ExecuteCmdCompat(PCSTR cmd, PCSTR current_dir, long timeout) {
+    if (!cmd || !*cmd || timeout < 0) return {};
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    if (!::CreatePipe(&read_pipe, &write_pipe, &sa, 0))
+        return {};
+    ::SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = write_pipe;
+    si.hStdError = write_pipe;
+    si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi{};
+    std::string command = "cmd.exe /D /S /C \"" + std::string(cmd) + "\"";
+    std::vector<char> mutable_command(command.begin(), command.end());
+    mutable_command.push_back('\0');
+
+    const BOOL created = ::CreateProcessA(
+        nullptr,
+        mutable_command.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        (current_dir && *current_dir) ? current_dir : nullptr,
+        &si,
+        &pi);
+
+    ::CloseHandle(write_pipe);
+    if (!created) {
+        ::CloseHandle(read_pipe);
+        return {};
+    }
+
+    std::string output;
+    const ULONGLONG start = ::GetTickCount64();
+    bool terminated = false;
+
+    for (;;) {
+        DWORD available = 0;
+        if (::PeekNamedPipe(read_pipe, nullptr, 0, nullptr, &available, nullptr) &&
+            available > 0) {
+            std::vector<char> chunk(std::min<DWORD>(available, 64 * 1024));
+            DWORD got = 0;
+            if (::ReadFile(
+                    read_pipe, chunk.data(),
+                    static_cast<DWORD>(chunk.size()), &got, nullptr) &&
+                got > 0) {
+                output.append(chunk.data(), got);
+            }
+        }
+
+        const DWORD wait = ::WaitForSingleObject(pi.hProcess, 10);
+        if (wait == WAIT_OBJECT_0) break;
+
+        if (timeout > 0 &&
+            (::GetTickCount64() - start) >= static_cast<ULONGLONG>(timeout)) {
+            ::TerminateProcess(pi.hProcess, 1);
+            ::WaitForSingleObject(pi.hProcess, 1000);
+            terminated = true;
+            break;
+        }
+    }
+
+    for (;;) {
+        char chunk[4096];
+        DWORD got = 0;
+        if (!::ReadFile(read_pipe, chunk, sizeof(chunk), &got, nullptr) || got == 0)
+            break;
+        output.append(chunk, got);
+    }
+
+    ::CloseHandle(read_pipe);
+    ::CloseHandle(pi.hThread);
+    ::CloseHandle(pi.hProcess);
+
+    (void)terminated;
+    return output;
 }
 
 } // namespace
