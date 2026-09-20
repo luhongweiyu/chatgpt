@@ -14,6 +14,9 @@ jobs:
       - name: Configure x64
         shell: pwsh
         run: cmake -S . -B build -A x64
+      - name: Audit 416 APIs
+        shell: pwsh
+        run: python tools/audit_api.py
       - name: Build Release
         shell: pwsh
         run: cmake --build build --config Release --parallel
