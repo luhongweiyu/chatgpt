@@ -12,6 +12,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -44,7 +45,46 @@ struct DmImpl {
     ULONGLONG prev_kernel = 0;
     ULONGLONG prev_user = 0;
     bool cpu_sample_valid = false;
+    long id = 0;
+    long enum_window_delay = 10000;
+    bool show_error_msg = true;
+    std::string global_path;
 };
+
+
+std::atomic<long> g_next_dm_id{1};
+std::atomic<long> g_dm_object_count{0};
+
+std::string ModuleDirectoryCompat(bool current_dll) {
+    HMODULE module = nullptr;
+    if (current_dll) {
+        ::GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(&ModuleDirectoryCompat),
+            &module);
+    } else {
+        module = ::GetModuleHandleA(nullptr);
+    }
+    if (!module) return {};
+
+    std::vector<char> buf(32768, 0);
+    const DWORD n = ::GetModuleFileNameA(module, buf.data(), static_cast<DWORD>(buf.size()));
+    if (!n || n >= buf.size()) return {};
+    std::filesystem::path p(std::string(buf.data(), n));
+    return p.parent_path().string();
+}
+
+std::string NormalizeGlobalPathCompat(PCSTR input) {
+    if (!input || !*input) return {};
+    std::filesystem::path p(input);
+    if (p.is_relative())
+        p = std::filesystem::path(ModuleDirectoryCompat(false)) / p;
+    std::error_code ec;
+    p = std::filesystem::absolute(p, ec);
+    if (ec) return {};
+    p = p.lexically_normal();
+    return p.string();
+}
 
 DmImpl *P(void *p) { return static_cast<DmImpl *>(p); }
 const DmImpl *P(const void *p) { return static_cast<const DmImpl *>(p); }
@@ -407,8 +447,19 @@ extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Conf
 extern "C" HCBYJ64_API BOOL LoadDmW(PCWSTR path) { return hcbyj64::OpRuntime::ConfigureW(path) ? TRUE : FALSE; }
 extern "C" HCBYJ64_API BOOL FreeDm(void) { hcbyj64::OpRuntime::Reset(); return TRUE; }
 
-dmsoft::dmsoft() : impl(new DmImpl()) {}
-dmsoft::~dmsoft() { delete P(impl); impl = nullptr; }
+dmsoft::dmsoft() : impl(new DmImpl()) {
+    auto *p = P(impl);
+    p->id = g_next_dm_id.fetch_add(1, std::memory_order_relaxed);
+    p->global_path = ModuleDirectoryCompat(false);
+    g_dm_object_count.fetch_add(1, std::memory_order_relaxed);
+}
+dmsoft::~dmsoft() {
+    if (impl) {
+        g_dm_object_count.fetch_sub(1, std::memory_order_relaxed);
+        delete P(impl);
+        impl = nullptr;
+    }
+}
 bool dmsoft::IsValid() const { return impl != nullptr && P(impl)->op.IsValid(); }
 
 long dmsoft::ReleaseRef() { return 1; }
@@ -1519,6 +1570,53 @@ long dmsoft::RunApp(PCSTR path, long mode) {
         return reinterpret_cast<INT_PTR>(r) > 32 ? 1 : 0;
     }
     return 0;
+}
+
+
+long dmsoft::SetPath(PCSTR path) {
+    auto *p = P(impl);
+    if (!p || !path || !*path) return 0;
+    const std::string normalized = NormalizeGlobalPathCompat(path);
+    if (normalized.empty()) return 0;
+    p->global_path = normalized;
+    return 1;
+}
+
+const char *dmsoft::GetPath() {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = p->global_path;
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetBasePath() {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = ModuleDirectoryCompat(true);
+    return p->scratch.c_str();
+}
+
+long dmsoft::GetID() {
+    auto *p = P(impl);
+    return p ? p->id : 0;
+}
+
+long dmsoft::GetDmCount() {
+    return g_dm_object_count.load(std::memory_order_relaxed);
+}
+
+long dmsoft::SetEnumWindowDelay(long delay) {
+    auto *p = P(impl);
+    if (!p || delay < 0) return 0;
+    p->enum_window_delay = delay;
+    return 1;
+}
+
+long dmsoft::SetShowErrorMsg(long show) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->show_error_msg = show != 0;
+    return 1;
 }
 
 #include "legacy_dm_generated.inc"
