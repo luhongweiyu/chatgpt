@@ -81,6 +81,7 @@ struct DmImpl {
     std::map<long, std::string> play_aliases;
     bool pic_cache_enabled = true;
     std::map<std::string, std::shared_ptr<ScreenImageCompat>> pic_cache;
+    std::map<std::string, std::shared_ptr<ScreenImageCompat>> memory_pic_cache;
     bool display_debug_enabled = false;
     long display_delay = 3000;
     long display_refresh_delay = 400;
@@ -2557,6 +2558,22 @@ std::vector<PicRefCompat> ExpandPicRefsCompat(DmImpl *p, PCSTR pic_name) {
             raw.is_absolute() ? raw : ResolveObjectFilePathCompat(p, token.c_str());
 
         if (!HasWildcardCompat(token)) {
+            std::string memory_key = raw.filename().string();
+            std::transform(
+                memory_key.begin(), memory_key.end(), memory_key.begin(),
+                [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+            bool in_memory = false;
+            if (p) {
+                std::lock_guard<std::mutex> lock(p->state_mutex);
+                in_memory = p->memory_pic_cache.count(memory_key) != 0;
+            }
+            if (in_memory) {
+                out.push_back({token, raw.filename()});
+                continue;
+            }
+
             std::error_code ec;
             if (std::filesystem::is_regular_file(full, ec) && !ec)
                 out.push_back({token, full});
@@ -2643,6 +2660,20 @@ bool LoadBmp24Compat(
 std::shared_ptr<ScreenImageCompat> LoadPicCachedCompat(
     DmImpl *p, const std::filesystem::path &path) {
     if (!p) return {};
+
+    std::string memory_key = path.filename().string();
+    std::transform(
+        memory_key.begin(), memory_key.end(), memory_key.begin(),
+        [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        const auto memory_it = p->memory_pic_cache.find(memory_key);
+        if (memory_it != p->memory_pic_cache.end())
+            return memory_it->second;
+    }
+
     const std::string key = LowerPathKeyCompat(path);
 
     {
@@ -3086,6 +3117,243 @@ std::string QueryProcessCommandLineCompat(DWORD pid) {
         us->Buffer, static_cast<int>(us->Length / sizeof(wchar_t)));
 }
 
+
+
+bool LoadBmp24MemoryCompat(
+    const unsigned char *data, size_t size, ScreenImageCompat &out) {
+    out = {};
+    if (!data ||
+        size < sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER))
+        return false;
+
+    BITMAPFILEHEADER fh{};
+    BITMAPINFOHEADER ih{};
+    std::memcpy(&fh, data, sizeof(fh));
+    std::memcpy(&ih, data + sizeof(fh), sizeof(ih));
+
+    if (fh.bfType != 0x4D42 ||
+        ih.biSize < sizeof(BITMAPINFOHEADER) ||
+        ih.biPlanes != 1 ||
+        ih.biBitCount != 24 ||
+        ih.biCompression != BI_RGB ||
+        ih.biWidth <= 0 ||
+        ih.biHeight == 0)
+        return false;
+
+    const long width = ih.biWidth;
+    const long height = ih.biHeight < 0 ? -ih.biHeight : ih.biHeight;
+    if (width <= 0 || height <= 0 ||
+        static_cast<unsigned long long>(width) *
+            static_cast<unsigned long long>(height) >
+            256ULL * 1024ULL * 1024ULL)
+        return false;
+
+    const size_t row_bytes =
+        ((static_cast<size_t>(width) * 3u + 3u) / 4u) * 4u;
+    const unsigned long long needed =
+        static_cast<unsigned long long>(fh.bfOffBits) +
+        static_cast<unsigned long long>(row_bytes) *
+            static_cast<unsigned long long>(height);
+    if (fh.bfOffBits < sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) ||
+        needed > size)
+        return false;
+
+    out.x = 0;
+    out.y = 0;
+    out.width = width;
+    out.height = height;
+    out.pixels.resize(
+        static_cast<size_t>(width) * static_cast<size_t>(height));
+
+    const bool top_down = ih.biHeight < 0;
+    const auto *pixels = data + fh.bfOffBits;
+    for (long file_y = 0; file_y < height; ++file_y) {
+        const long y = top_down ? file_y : (height - 1 - file_y);
+        const auto *row =
+            pixels + static_cast<size_t>(file_y) * row_bytes;
+        for (long x = 0; x < width; ++x) {
+            auto &dst = out.pixels[
+                static_cast<size_t>(y) * static_cast<size_t>(width) +
+                static_cast<size_t>(x)];
+            dst.b = row[static_cast<size_t>(x) * 3 + 0];
+            dst.g = row[static_cast<size_t>(x) * 3 + 1];
+            dst.r = row[static_cast<size_t>(x) * 3 + 2];
+        }
+    }
+    return true;
+}
+
+bool CopyLegacyBytesCompat(
+    long address, long size, std::vector<unsigned char> &out) {
+    out.clear();
+    if (address == 0 || size <= 0 || size > 256 * 1024 * 1024)
+        return false;
+    out.resize(static_cast<size_t>(size));
+    SIZE_T got = 0;
+    const ULONG_PTR ptr =
+        static_cast<ULONG_PTR>(static_cast<unsigned long>(address));
+    if (!::ReadProcessMemory(
+            ::GetCurrentProcess(),
+            reinterpret_cast<LPCVOID>(ptr),
+            out.data(), out.size(), &got) ||
+        got != out.size()) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+struct MemoryPicCompat {
+    long address = 0;
+    long size = 0;
+    long index = -1;
+    std::shared_ptr<ScreenImageCompat> image;
+};
+
+bool ParseMemoryPicInfoCompat(
+    PCSTR pic_info, std::vector<MemoryPicCompat> &out) {
+    out.clear();
+    if (!pic_info || !*pic_info) return false;
+
+    const auto entries = SplitCompat(pic_info, '|');
+    long index = 0;
+    for (const auto &entry : entries) {
+        if (entry.empty()) continue;
+        const auto parts = SplitCompat(entry, ',');
+        if (parts.size() != 2) return false;
+
+        char *end1 = nullptr;
+        char *end2 = nullptr;
+        const unsigned long long addr64 =
+            std::strtoull(parts[0].c_str(), &end1, 10);
+        const long long size64 =
+            std::strtoll(parts[1].c_str(), &end2, 10);
+        if (!end1 || *end1 != '\0' ||
+            !end2 || *end2 != '\0' ||
+            addr64 == 0 ||
+            addr64 > static_cast<unsigned long long>(
+                std::numeric_limits<unsigned long>::max()) ||
+            size64 <= 0 || size64 > 256LL * 1024LL * 1024LL)
+            return false;
+
+        std::vector<unsigned char> bytes;
+        const long address =
+            static_cast<long>(static_cast<unsigned long>(addr64));
+        const long byte_count = static_cast<long>(size64);
+        if (!CopyLegacyBytesCompat(address, byte_count, bytes))
+            return false;
+
+        auto image = std::make_shared<ScreenImageCompat>();
+        if (!LoadBmp24MemoryCompat(bytes.data(), bytes.size(), *image))
+            return false;
+
+        out.push_back({address, byte_count, index++, std::move(image)});
+    }
+    return !out.empty();
+}
+
+std::vector<PicSearchResultCompat> FindMemoryPicsAllCompat(
+    DmImpl *p,
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_info, PCSTR delta_color,
+    long minimum_percent, long dir,
+    size_t limit) {
+    std::vector<PicSearchResultCompat> out;
+    if (!p || x2 < x1 || y2 < y1 ||
+        minimum_percent < 0 || minimum_percent > 100 ||
+        limit == 0)
+        return out;
+
+    PicDeltaCompat delta{};
+    if (!ParsePicDeltaCompat(delta_color, delta)) return out;
+
+    std::vector<MemoryPicCompat> pics;
+    if (!ParseMemoryPicInfoCompat(pic_info, pics)) return out;
+
+    ScreenImageCompat screen;
+    if (!CaptureScreenRegionForObjectCompat(
+            p, x1, y1, x2, y2, screen))
+        return out;
+
+    ForEachPointInDirectionCompat(
+        x1, y1, x2, y2, dir,
+        [&](long x, long y) {
+            for (const auto &pic : pics) {
+                if (!pic.image) continue;
+                if (x + pic.image->width - 1 > x2 ||
+                    y + pic.image->height - 1 > y2)
+                    continue;
+                const int score = PicMatchPercentCompat(
+                    screen, x, y, *pic.image, delta);
+                if (score < minimum_percent) continue;
+                out.push_back({
+                    pic.index, x, y, score,
+                    std::to_string(pic.index)
+                });
+                if (out.size() >= limit) return true;
+            }
+            return false;
+        });
+    return out;
+}
+
+bool ScreenImageToBmpBytesCompat(
+    const ScreenImageCompat &image,
+    std::vector<unsigned char> &out) {
+    out.clear();
+    if (image.width <= 0 || image.height <= 0 ||
+        image.pixels.empty())
+        return false;
+
+    const size_t row_bytes =
+        ((static_cast<size_t>(image.width) * 3u + 3u) / 4u) * 4u;
+    const unsigned long long pixel_bytes =
+        static_cast<unsigned long long>(row_bytes) *
+        static_cast<unsigned long long>(image.height);
+    const unsigned long long total =
+        sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) +
+        pixel_bytes;
+    if (total > static_cast<unsigned long long>(
+                    std::numeric_limits<DWORD>::max()))
+        return false;
+
+    BITMAPFILEHEADER fh{};
+    BITMAPINFOHEADER ih{};
+    fh.bfType = 0x4D42;
+    fh.bfOffBits =
+        sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    fh.bfSize = static_cast<DWORD>(total);
+
+    ih.biSize = sizeof(ih);
+    ih.biWidth = image.width;
+    ih.biHeight = image.height;
+    ih.biPlanes = 1;
+    ih.biBitCount = 24;
+    ih.biCompression = BI_RGB;
+    ih.biSizeImage = static_cast<DWORD>(pixel_bytes);
+
+    out.resize(static_cast<size_t>(total), 0);
+    std::memcpy(out.data(), &fh, sizeof(fh));
+    std::memcpy(
+        out.data() + sizeof(fh), &ih, sizeof(ih));
+
+    auto *dst = out.data() + fh.bfOffBits;
+    for (long file_y = 0; file_y < image.height; ++file_y) {
+        const long y = image.height - 1 - file_y;
+        auto *row =
+            dst + static_cast<size_t>(file_y) * row_bytes;
+        for (long x = 0; x < image.width; ++x) {
+            const auto &c = image.pixels[
+                static_cast<size_t>(y) *
+                    static_cast<size_t>(image.width) +
+                static_cast<size_t>(x)];
+            row[static_cast<size_t>(x) * 3 + 0] = c.b;
+            row[static_cast<size_t>(x) * 3 + 1] = c.g;
+            row[static_cast<size_t>(x) * 3 + 2] = c.r;
+        }
+    }
+    return true;
+}
 
 void FreeLegacyBinBufferCompat(DmImpl *p) {
     if (!p || !p->legacy_bin_buffer) return;
@@ -6473,6 +6741,235 @@ long dmsoft::SetExcludeRegion(long type, PCSTR info) {
     std::lock_guard<std::mutex> lock(p->state_mutex);
     p->exclude_regions.insert(
         p->exclude_regions.end(), parsed.begin(), parsed.end());
+    return 1;
+}
+
+
+long dmsoft::LoadPicByte(long addr, long size, PCSTR name) {
+    auto *p = P(impl);
+    if (!p || !name || !*name || addr == 0 || size <= 0)
+        return 0;
+
+    std::vector<unsigned char> bytes;
+    if (!CopyLegacyBytesCompat(addr, size, bytes)) return 0;
+
+    auto image = std::make_shared<ScreenImageCompat>();
+    if (!LoadBmp24MemoryCompat(bytes.data(), bytes.size(), *image))
+        return 0;
+
+    std::string key(name);
+    std::transform(
+        key.begin(), key.end(), key.begin(),
+        [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->memory_pic_cache[key] = std::move(image);
+    return 1;
+}
+
+const char *dmsoft::AppendPicAddr(
+    PCSTR pic_info, long addr, long size) {
+    auto *p = P(impl);
+    if (!p || addr == 0 || size <= 0) return "";
+
+    std::ostringstream oss;
+    if (pic_info && *pic_info)
+        oss << pic_info << '|';
+    oss << static_cast<unsigned long>(
+               static_cast<unsigned long>(addr))
+        << ',' << size;
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindPicMem(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_info, PCSTR delta_color,
+    double sim, long dir, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y) return -1;
+
+    auto *p = P(impl);
+    if (!p) return -1;
+    const long threshold = static_cast<long>(
+        std::ceil(std::clamp(sim, 0.0, 1.0) * 100.0));
+    const auto matches = FindMemoryPicsAllCompat(
+        p, x1, y1, x2, y2,
+        pic_info, delta_color, threshold, dir, 1);
+    if (matches.empty()) return -1;
+    *x = matches.front().x;
+    *y = matches.front().y;
+    return matches.front().index;
+}
+
+const char *dmsoft::FindPicMemE(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_info, PCSTR delta_color,
+    double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    const long index = FindPicMem(
+        x1, y1, x2, y2,
+        pic_info, delta_color, sim, dir, &x, &y);
+    p->scratch =
+        std::to_string(index) + "|" +
+        std::to_string(x) + "|" +
+        std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindPicMemEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_info, PCSTR delta_color,
+    double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    const long threshold = static_cast<long>(
+        std::ceil(std::clamp(sim, 0.0, 1.0) * 100.0));
+    const auto matches = FindMemoryPicsAllCompat(
+        p, x1, y1, x2, y2,
+        pic_info, delta_color, threshold, dir, 1500);
+    std::ostringstream oss;
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (i) oss << '|';
+        oss << matches[i].index << ','
+            << matches[i].x << ','
+            << matches[i].y;
+    }
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindPicSimMem(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_info, PCSTR delta_color,
+    long sim, long dir, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y) return -1;
+    auto *p = P(impl);
+    if (!p || sim < 0 || sim > 100) return -1;
+
+    const auto matches = FindMemoryPicsAllCompat(
+        p, x1, y1, x2, y2,
+        pic_info, delta_color, sim, dir, 1);
+    if (matches.empty()) return -1;
+    *x = matches.front().x;
+    *y = matches.front().y;
+    return matches.front().index;
+}
+
+const char *dmsoft::FindPicSimMemE(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_info, PCSTR delta_color,
+    long sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    const long index = FindPicSimMem(
+        x1, y1, x2, y2,
+        pic_info, delta_color, sim, dir, &x, &y);
+    p->scratch =
+        std::to_string(index) + "|" +
+        std::to_string(x) + "|" +
+        std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindPicSimMemEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_info, PCSTR delta_color,
+    long sim, long dir) {
+    auto *p = P(impl);
+    if (!p || sim < 0 || sim > 100) return "";
+    const auto matches = FindMemoryPicsAllCompat(
+        p, x1, y1, x2, y2,
+        pic_info, delta_color, sim, dir, 1500);
+    std::ostringstream oss;
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (i) oss << '|';
+        oss << matches[i].index << ','
+            << matches[i].x << ','
+            << matches[i].y;
+    }
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::GetScreenData(
+    long x1, long y1, long x2, long y2) {
+    auto *p = P(impl);
+    if (!p) return 0;
+
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionForObjectCompat(
+            p, x1, y1, x2, y2, image))
+        return 0;
+
+    const SIZE_T count = image.pixels.size();
+    if (count == 0 ||
+        count > std::numeric_limits<SIZE_T>::max() / sizeof(DWORD))
+        return 0;
+    const SIZE_T bytes = count * sizeof(DWORD);
+    auto *memory = static_cast<DWORD *>(
+        AllocateLegacyBinBufferCompat(p, bytes));
+    if (!memory) return 0;
+
+    for (size_t i = 0; i < count; ++i) {
+        const auto &c = image.pixels[i];
+        memory[i] =
+            (static_cast<DWORD>(c.r) << 16) |
+            (static_cast<DWORD>(c.g) << 8) |
+            static_cast<DWORD>(c.b);
+    }
+    return static_cast<long>(
+        reinterpret_cast<INT_PTR>(memory));
+}
+
+long dmsoft::GetScreenDataBmp(
+    long x1, long y1, long x2, long y2,
+    long *data, long *size) {
+    if (data) *data = 0;
+    if (size) *size = 0;
+    if (!data || !size) return 0;
+
+    auto *p = P(impl);
+    if (!p) return 0;
+
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionForObjectCompat(
+            p, x1, y1, x2, y2, image))
+        return 0;
+
+    std::vector<unsigned char> bytes;
+    if (!ScreenImageToBmpBytesCompat(image, bytes) ||
+        bytes.empty() ||
+        bytes.size() > static_cast<size_t>(LONG_MAX))
+        return 0;
+
+    void *memory =
+        AllocateLegacyBinBufferCompat(p, bytes.size());
+    if (!memory) return 0;
+    std::memcpy(memory, bytes.data(), bytes.size());
+
+    *data = static_cast<long>(
+        reinterpret_cast<INT_PTR>(memory));
+    *size = static_cast<long>(bytes.size());
+    return 1;
+}
+
+long dmsoft::FreeScreenData(long handle) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    if (!p->legacy_bin_buffer) return 1;
+
+    const long current = static_cast<long>(
+        reinterpret_cast<INT_PTR>(p->legacy_bin_buffer));
+    if (handle != 0 && handle != current) return 0;
+    FreeLegacyBinBufferCompat(p);
     return 1;
 }
 
