@@ -7,7 +7,7 @@
 #include <windows.h>
 #include <winternl.h>
 #include <tlhelp32.h>
-#include <psapi.h>
+#include <psapi.h>\n#include <wincrypt.h>
 
 #include <algorithm>
 #include <cctype>
@@ -132,6 +132,48 @@ ULONGLONG FileTime64(const FILETIME &ft) {
 }
 
 HWND HwndFromLong(long v) { return reinterpret_cast<HWND>(static_cast<INT_PTR>(v)); }
+
+std::string HexBytesCompat(const void *ptr, size_t size) {
+    const auto *p = static_cast<const unsigned char *>(ptr);
+    static const char kHex[] = "0123456789abcdef";
+    std::string out;
+    if (size) out.reserve(size * 3 - 1);
+    for (size_t i = 0; i < size; ++i) {
+        if (i) out.push_back(' ');
+        out.push_back(kHex[(p[i] >> 4) & 0x0f]);
+        out.push_back(kHex[p[i] & 0x0f]);
+    }
+    return out;
+}
+
+std::vector<std::string> SplitPipeCompat(PCSTR text) {
+    std::vector<std::string> out;
+    if (!text || !*text) return out;
+    const char *begin = text;
+    const char *p = text;
+    for (;; ++p) {
+        if (*p == '|' || *p == '\\0') {
+            out.emplace_back(begin, p);
+            if (*p == '\\0') break;
+            begin = p + 1;
+        }
+    }
+    return out;
+}
+
+bool ParseResultXYCompat(const std::string &item, long *x, long *y) {
+    if (!x || !y) return false;
+    const char *p = item.c_str();
+    char *end = nullptr;
+    long vx = std::strtol(p, &end, 10);
+    if (end == p || *end != ',') return false;
+    p = end + 1;
+    long vy = std::strtol(p, &end, 10);
+    if (end == p) return false;
+    *x = vx;
+    *y = vy;
+    return true;
+}
 
 std::string JoinMultiSz(const char *buf, size_t cap) {
     std::string out;
@@ -722,6 +764,117 @@ const char *dmsoft::GetRealPath(PCSTR path) {
     const DWORD n = ::GetFullPathNameA(path, static_cast<DWORD>(buf.size()), buf.data(), nullptr);
     p->scratch = (n > 0 && n < buf.size()) ? std::string(buf.data(), n) : std::string();
     return p->scratch.c_str();
+}
+
+
+const char *dmsoft::Md5(PCSTR str) {
+    auto *p = P(impl);
+    if (!p || !str) return "";
+
+    HCRYPTPROV prov = 0;
+    HCRYPTHASH hash = 0;
+    BYTE digest[16]{};
+    DWORD digest_len = sizeof(digest);
+
+    if (!::CryptAcquireContextA(&prov, nullptr, nullptr, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    const bool ok =
+        ::CryptCreateHash(prov, CALG_MD5, 0, 0, &hash) &&
+        ::CryptHashData(hash, reinterpret_cast<const BYTE *>(str),
+                        static_cast<DWORD>(std::strlen(str)), 0) &&
+        ::CryptGetHashParam(hash, HP_HASHVAL, digest, &digest_len, 0);
+
+    if (hash) ::CryptDestroyHash(hash);
+    ::CryptReleaseContext(prov, 0);
+
+    if (!ok || digest_len != sizeof(digest)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    static const char hex[] = "0123456789abcdef";
+    p->scratch.resize(32);
+    for (size_t i = 0; i < sizeof(digest); ++i) {
+        p->scratch[i * 2] = hex[(digest[i] >> 4) & 0x0f];
+        p->scratch[i * 2 + 1] = hex[digest[i] & 0x0f];
+    }
+    return p->scratch.c_str();
+}
+
+long dmsoft::GetResultCount(PCSTR str) {
+    return static_cast<long>(SplitPipeCompat(str).size());
+}
+
+long dmsoft::GetResultPos(PCSTR str, long index, long *x, long *y) {
+    if (!x || !y || index < 0) return 0;
+    const auto items = SplitPipeCompat(str);
+    if (static_cast<size_t>(index) >= items.size()) return 0;
+    return ParseResultXYCompat(items[static_cast<size_t>(index)], x, y) ? 1 : 0;
+}
+
+const char *dmsoft::IntToData(LONGLONG int_value, long type) {
+    auto *p = P(impl);
+    if (!p) return "";
+    switch (type) {
+    case 0: { std::int32_t v = static_cast<std::int32_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
+    case 1: { std::int16_t v = static_cast<std::int16_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
+    case 2: { std::int8_t  v = static_cast<std::int8_t>(int_value);  p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
+    case 3: { std::int64_t v = static_cast<std::int64_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
+    case 4: { std::uint32_t v = static_cast<std::uint32_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
+    case 5: { std::uint16_t v = static_cast<std::uint16_t>(int_value); p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
+    case 6: { std::uint8_t  v = static_cast<std::uint8_t>(int_value);  p->scratch = HexBytesCompat(&v, sizeof(v)); break; }
+    default: p->scratch.clear(); break;
+    }
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FloatToData(float float_value) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = HexBytesCompat(&float_value, sizeof(float_value));
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::DoubleToData(double double_value) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = HexBytesCompat(&double_value, sizeof(double_value));
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::StringToData(PCSTR string_value, long type) {
+    auto *p = P(impl);
+    if (!p || !string_value) return "";
+    if (type == 0) {
+        p->scratch = HexBytesCompat(string_value, std::strlen(string_value));
+        return p->scratch.c_str();
+    }
+    if (type == 1) {
+        const int count = ::MultiByteToWideChar(CP_ACP, 0, string_value, -1, nullptr, 0);
+        if (count <= 0) { p->scratch.clear(); return p->scratch.c_str(); }
+        std::wstring wide(static_cast<size_t>(count - 1), L'\0');
+        if (!wide.empty()) ::MultiByteToWideChar(CP_ACP, 0, string_value, -1, wide.data(), count);
+        p->scratch = HexBytesCompat(wide.data(), wide.size() * sizeof(wchar_t));
+        return p->scratch.c_str();
+    }
+    p->scratch.clear();
+    return p->scratch.c_str();
+}
+
+long dmsoft::GetLocale() {
+    return static_cast<long>(::GetThreadLocale());
+}
+
+long dmsoft::CheckUAC() {
+    HANDLE token = nullptr;
+    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token)) return 0;
+    TOKEN_ELEVATION elevation{};
+    DWORD cb = sizeof(elevation);
+    const BOOL ok = ::GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &cb);
+    ::CloseHandle(token);
+    return ok ? (elevation.TokenIsElevated ? 1 : 0) : 0;
 }
 
 #include "legacy_dm_generated.inc"
