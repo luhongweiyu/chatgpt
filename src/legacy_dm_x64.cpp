@@ -4300,4 +4300,119 @@ long dmsoft::Capture(
     return WriteBmp24Compat(path, image) ? 1 : 0;
 }
 
+
+long dmsoft::LockMouseRect(long x1, long y1, long x2, long y2) {
+    if (x1 == 0 && y1 == 0 && x2 == 0 && y2 == 0)
+        return ::ClipCursor(nullptr) ? 1 : 0;
+    RECT rect{static_cast<LONG>(x1), static_cast<LONG>(y1),
+              static_cast<LONG>(x2), static_cast<LONG>(y2)};
+    return ::ClipCursor(&rect) ? 1 : 0;
+}
+
+long dmsoft::ExitOs(long type) {
+    UINT flags = 0;
+    switch (type) {
+    case 0: flags = EWX_LOGOFF; break;
+    case 1: flags = EWX_SHUTDOWN | EWX_POWEROFF; break;
+    case 2: flags = EWX_REBOOT; break;
+    default: return 0;
+    }
+    if (type != 0 && !EnableShutdownPrivilegeCompat()) return 0;
+    return ::ExitWindowsEx(
+        flags, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER) ? 1 : 0;
+}
+
+long dmsoft::SetUAC(long uac) {
+    if (uac != 0 && uac != 1) return 0;
+    HKEY key = nullptr;
+    const LSTATUS open = ::RegOpenKeyExA(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+        0, KEY_SET_VALUE | KEY_WOW64_64KEY, &key);
+    if (open != ERROR_SUCCESS) return 0;
+    const DWORD value = static_cast<DWORD>(uac);
+    const LSTATUS set = ::RegSetValueExA(
+        key, "EnableLUA", 0, REG_DWORD,
+        reinterpret_cast<const BYTE *>(&value), sizeof(value));
+    ::RegCloseKey(key);
+    return set == ERROR_SUCCESS ? 1 : 0;
+}
+
+long dmsoft::SetScreen(long width, long height, long depth) {
+    if (width <= 0 || height <= 0 || depth <= 0) return 0;
+    DEVMODEA mode{};
+    mode.dmSize = sizeof(mode);
+    mode.dmPelsWidth = static_cast<DWORD>(width);
+    mode.dmPelsHeight = static_cast<DWORD>(height);
+    mode.dmBitsPerPel = static_cast<DWORD>(depth);
+    mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+    return ::ChangeDisplaySettingsA(&mode, CDS_UPDATEREGISTRY) ==
+           DISP_CHANGE_SUCCESSFUL ? 1 : 0;
+}
+
+long dmsoft::ShowTaskBarIcon(long hwnd, long is_show) {
+    HWND h = HwndFromLong(hwnd);
+    if (!::IsWindow(h) || (is_show != 0 && is_show != 1)) return 0;
+
+    const HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool uninit = SUCCEEDED(init);
+    if (FAILED(init) && init != RPC_E_CHANGED_MODE) return 0;
+
+    ITaskbarList *taskbar = nullptr;
+    HRESULT hr = ::CoCreateInstance(
+        CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+        IID_ITaskbarList, reinterpret_cast<void **>(&taskbar));
+    if (SUCCEEDED(hr) && taskbar) {
+        hr = taskbar->HrInit();
+        if (SUCCEEDED(hr))
+            hr = is_show ? taskbar->AddTab(h) : taskbar->DeleteTab(h);
+        taskbar->Release();
+    }
+    if (uninit) ::CoUninitialize();
+    return SUCCEEDED(hr) ? 1 : 0;
+}
+
+const char *dmsoft::SelectDirectory() {
+    auto *p = P(impl);
+    if (!p) return "";
+    BROWSEINFOA bi{};
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    LPITEMIDLIST item = ::SHBrowseForFolderA(&bi);
+    if (!item) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    char path[MAX_PATH]{};
+    const BOOL ok = ::SHGetPathFromIDListA(item, path);
+    ::CoTaskMemFree(item);
+    p->scratch = ok ? path : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::SelectFile() {
+    auto *p = P(impl);
+    if (!p) return "";
+    char file[32768]{};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = static_cast<DWORD>(sizeof(file));
+    ofn.lpstrFilter = "All Files\0*.*\0\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    p->scratch = ::GetOpenFileNameA(&ofn) ? file : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::ExecuteCmd(PCSTR cmd, PCSTR current_dir, long time_out) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = ExecuteCmdCompat(cmd, current_dir, time_out);
+    return p->scratch.c_str();
+}
+
+long dmsoft::DownloadFile(PCSTR url, PCSTR save_file, long timeout) {
+    return DownloadFileCompat(url, save_file, timeout);
+}
+
 #include "legacy_dm_generated.inc"
