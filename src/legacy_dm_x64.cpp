@@ -10,6 +10,7 @@
 #include <psapi.h>
 #include <wincrypt.h>
 #include <shellapi.h>
+#include <winioctl.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1044,6 +1045,213 @@ std::string BaseNameCompat(const std::string &path) {
     if (path.empty()) return {};
     const size_t p = path.find_last_of("\\/");
     return p == std::string::npos ? path : path.substr(p + 1);
+}
+
+
+std::string TrimStorageStringCompat(const char *text) {
+    if (!text) return {};
+    std::string out(text);
+    while (!out.empty() &&
+           (out.back() == ' ' || out.back() == '\t' || out.back() == '\r' || out.back() == '\n' || out.back() == '\0'))
+        out.pop_back();
+    size_t begin = 0;
+    while (begin < out.size() && (out[begin] == ' ' || out[begin] == '\t')) ++begin;
+    if (begin) out.erase(0, begin);
+    return out;
+}
+
+struct DiskDescriptorCompat {
+    std::string vendor;
+    std::string product;
+    std::string revision;
+    std::string serial;
+};
+
+bool QueryDiskDescriptorCompat(long index, DiskDescriptorCompat &out) {
+    if (index < 0 || index > 5) return false;
+    char device[64]{};
+    std::snprintf(device, sizeof(device), "\\\\.\\PhysicalDrive%ld", index);
+
+    HANDLE h = ::CreateFileA(
+        device,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        0,
+        nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+
+    STORAGE_PROPERTY_QUERY query{};
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+
+    std::vector<unsigned char> buffer(4096, 0);
+    DWORD returned = 0;
+    const BOOL ok = ::DeviceIoControl(
+        h,
+        IOCTL_STORAGE_QUERY_PROPERTY,
+        &query,
+        sizeof(query),
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()),
+        &returned,
+        nullptr);
+    ::CloseHandle(h);
+    if (!ok || returned < sizeof(STORAGE_DEVICE_DESCRIPTOR)) return false;
+
+    const auto *d = reinterpret_cast<const STORAGE_DEVICE_DESCRIPTOR *>(buffer.data());
+    auto field = [&](DWORD offset) -> std::string {
+        if (offset == 0 || offset >= returned) return {};
+        return TrimStorageStringCompat(
+            reinterpret_cast<const char *>(buffer.data() + offset));
+    };
+
+    out.vendor = field(d->VendorIdOffset);
+    out.product = field(d->ProductIdOffset);
+    out.revision = field(d->ProductRevisionOffset);
+    out.serial = field(d->SerialNumberOffset);
+    return true;
+}
+
+std::string DiskModelCompat(const DiskDescriptorCompat &d) {
+    if (d.vendor.empty()) return d.product;
+    if (d.product.empty()) return d.vendor;
+    if (d.product.rfind(d.vendor, 0) == 0) return d.product;
+    return d.vendor + " " + d.product;
+}
+
+std::string QueryCommandLineCompat(DWORD pid) {
+    HANDLE process = ::OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+        FALSE,
+        pid);
+    if (!process) return {};
+
+    using NtQueryInformationProcessFn =
+        LONG (NTAPI *)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    auto query = ntdll
+        ? reinterpret_cast<NtQueryInformationProcessFn>(
+              ::GetProcAddress(ntdll, "NtQueryInformationProcess"))
+        : nullptr;
+    if (!query) {
+        ::CloseHandle(process);
+        return {};
+    }
+
+    constexpr ULONG kProcessCommandLineInformation = 60;
+    ULONG needed = 0;
+    LONG status = query(
+        process,
+        kProcessCommandLineInformation,
+        nullptr,
+        0,
+        &needed);
+
+    if (needed == 0 || needed > 1024 * 1024) {
+        ::CloseHandle(process);
+        return {};
+    }
+
+    std::vector<unsigned char> buffer(needed + sizeof(wchar_t) * 2, 0);
+    status = query(
+        process,
+        kProcessCommandLineInformation,
+        buffer.data(),
+        static_cast<ULONG>(buffer.size()),
+        &needed);
+    ::CloseHandle(process);
+    if (status < 0 || buffer.size() < sizeof(UNICODE_STRING)) return {};
+
+    const auto *us = reinterpret_cast<const UNICODE_STRING *>(buffer.data());
+    if (!us->Buffer || us->Length == 0) return {};
+
+    // For ProcessCommandLineInformation the returned UNICODE_STRING buffer
+    // points inside the caller supplied result block.
+    const auto begin = reinterpret_cast<const unsigned char *>(us->Buffer);
+    const auto base = buffer.data();
+    const auto end = base + buffer.size();
+    if (begin < base || begin + us->Length > end) return {};
+
+    return WideToAcpCompat(
+        reinterpret_cast<const wchar_t *>(begin),
+        static_cast<int>(us->Length / sizeof(wchar_t)));
+}
+
+bool SampleProcessCpuCompat(HANDLE process, long &cpu_percent, SIZE_T &working_set) {
+    cpu_percent = 0;
+    working_set = 0;
+
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    pmc.cb = sizeof(pmc);
+    if (::GetProcessMemoryInfo(
+            process,
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&pmc),
+            sizeof(pmc)))
+        working_set = pmc.WorkingSetSize;
+
+    FILETIME sys_idle1{}, sys_kernel1{}, sys_user1{};
+    FILETIME proc_create1{}, proc_exit1{}, proc_kernel1{}, proc_user1{};
+    if (!::GetSystemTimes(&sys_idle1, &sys_kernel1, &sys_user1) ||
+        !::GetProcessTimes(process, &proc_create1, &proc_exit1, &proc_kernel1, &proc_user1))
+        return false;
+
+    ::Sleep(1000);
+
+    FILETIME sys_idle2{}, sys_kernel2{}, sys_user2{};
+    FILETIME proc_create2{}, proc_exit2{}, proc_kernel2{}, proc_user2{};
+    if (!::GetSystemTimes(&sys_idle2, &sys_kernel2, &sys_user2) ||
+        !::GetProcessTimes(process, &proc_create2, &proc_exit2, &proc_kernel2, &proc_user2))
+        return false;
+
+    const ULONGLONG system_delta =
+        (FileTime64(sys_kernel2) - FileTime64(sys_kernel1)) +
+        (FileTime64(sys_user2) - FileTime64(sys_user1));
+    const ULONGLONG process_delta =
+        (FileTime64(proc_kernel2) - FileTime64(proc_kernel1)) +
+        (FileTime64(proc_user2) - FileTime64(proc_user1));
+
+    if (system_delta != 0) {
+        const ULONGLONG value = (process_delta * 100ULL + system_delta / 2ULL) / system_delta;
+        cpu_percent = static_cast<long>(std::min<ULONGLONG>(value, 100ULL));
+    }
+
+    pmc = {};
+    pmc.cb = sizeof(pmc);
+    if (::GetProcessMemoryInfo(
+            process,
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&pmc),
+            sizeof(pmc)))
+        working_set = pmc.WorkingSetSize;
+    return true;
+}
+
+std::string DisplayInfoCompat() {
+    DISPLAY_DEVICEA adapter{};
+    adapter.cb = sizeof(adapter);
+
+    std::vector<std::string> names;
+    for (DWORD i = 0; ::EnumDisplayDevicesA(nullptr, i, &adapter, 0); ++i) {
+        if (!(adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
+            adapter = {};
+            adapter.cb = sizeof(adapter);
+            continue;
+        }
+        const std::string name = TrimStorageStringCompat(adapter.DeviceString);
+        if (!name.empty() &&
+            std::find(names.begin(), names.end(), name) == names.end())
+            names.push_back(name);
+        adapter = {};
+        adapter.cb = sizeof(adapter);
+    }
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i) oss << '|';
+        oss << names[i];
+    }
+    return oss.str();
 }
 
 } // namespace
@@ -2772,6 +2980,7 @@ long dmsoft::GetOsType() {
     return 0;
 }
 
+
 const char *dmsoft::GetProcessInfo(long pid) {
     auto *p = P(impl);
     if (!p) return "";
@@ -2785,34 +2994,82 @@ const char *dmsoft::GetProcessInfo(long pid) {
 
     HANDLE process = ::OpenProcess(
         PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
-        FALSE, process_id);
+        FALSE,
+        process_id);
     if (!process) {
         p->scratch.clear();
         return p->scratch.c_str();
     }
 
-    PROCESS_MEMORY_COUNTERS_EX pmc{};
-    pmc.cb = sizeof(pmc);
+    long cpu_percent = 0;
     SIZE_T working_set = 0;
-    if (::GetProcessMemoryInfo(
-            process,
-            reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&pmc),
-            sizeof(pmc)))
-        working_set = pmc.WorkingSetSize;
-
-    FILETIME create{}, exit{}, kernel{}, user{};
-    ULONGLONG cpu_ms = 0;
-    if (::GetProcessTimes(process, &create, &exit, &kernel, &user)) {
-        cpu_ms = (FileTime64(kernel) + FileTime64(user)) / 10000ULL;
-    }
+    SampleProcessCpuCompat(process, cpu_percent, working_set);
     ::CloseHandle(process);
 
     std::ostringstream oss;
     oss << BaseNameCompat(path) << '|'
         << path << '|'
-        << cpu_ms << '|'
+        << cpu_percent << '|'
         << static_cast<unsigned long long>(working_set);
     p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::GetSpecialWindow(long flag) {
+    HWND hwnd = nullptr;
+    switch (flag) {
+    case 0:
+        hwnd = ::GetDesktopWindow();
+        break;
+    case 1:
+        hwnd = ::FindWindowA("Shell_TrayWnd", nullptr);
+        break;
+    default:
+        return 0;
+    }
+    return static_cast<long>(reinterpret_cast<INT_PTR>(hwnd));
+}
+
+const char *dmsoft::GetCommandLine(long hwnd) {
+    auto *p = P(impl);
+    if (!p) return "";
+    const DWORD pid = ResolvePid(p, hwnd);
+    if (!pid) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch = QueryCommandLineCompat(pid);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetDiskModel(long index) {
+    auto *p = P(impl);
+    if (!p) return "";
+    DiskDescriptorCompat d{};
+    p->scratch = QueryDiskDescriptorCompat(index, d) ? DiskModelCompat(d) : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetDiskReversion(long index) {
+    auto *p = P(impl);
+    if (!p) return "";
+    DiskDescriptorCompat d{};
+    p->scratch = QueryDiskDescriptorCompat(index, d) ? d.revision : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetDiskSerial(long index) {
+    auto *p = P(impl);
+    if (!p) return "";
+    DiskDescriptorCompat d{};
+    p->scratch = QueryDiskDescriptorCompat(index, d) ? d.serial : "";
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetDisplayInfo() {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = DisplayInfoCompat();
     return p->scratch.c_str();
 }
 
