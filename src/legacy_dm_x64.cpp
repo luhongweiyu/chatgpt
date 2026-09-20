@@ -1000,6 +1000,33 @@ long SendPasteCompat(long hwnd) {
     return 1;
 }
 
+
+long SendStringAnsiCompat(long hwnd, PCSTR str) {
+    if (!str) return 0;
+    HWND target = ResolvePasteTargetCompat(hwnd);
+    if (!target || !::IsWindow(target)) return 0;
+
+    const DWORD target_tid = ::GetWindowThreadProcessId(target, nullptr);
+    const DWORD self_tid = ::GetCurrentThreadId();
+    const BOOL attached =
+        target_tid && target_tid != self_tid
+            ? ::AttachThreadInput(self_tid, target_tid, TRUE)
+            : FALSE;
+
+    for (const unsigned char *p =
+             reinterpret_cast<const unsigned char *>(str);
+         *p; ++p) {
+        ::SendMessageA(
+            target,
+            WM_CHAR,
+            static_cast<WPARAM>(*p),
+            static_cast<LPARAM>(0x04000001));
+    }
+
+    if (attached) ::AttachThreadInput(self_tid, target_tid, FALSE);
+    return 1;
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -2651,6 +2678,11 @@ long dmsoft::KeyPressStr(PCSTR key_str, long delay) {
 
 long dmsoft::SendPaste(long hwnd) {
     return SendPasteCompat(hwnd);
+}
+
+
+long dmsoft::SendString(long hwnd, PCSTR str) {
+    return SendStringAnsiCompat(hwnd, str);
 }
 
 #include "legacy_dm_generated.inc"
