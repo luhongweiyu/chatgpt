@@ -3460,6 +3460,7 @@ dmsoft::~dmsoft() {
             ::mciSendStringA(close.c_str(), nullptr, 0, nullptr);
         }
         p->play_aliases.clear();
+        FreeLegacyBinBufferCompat(p);
         g_dm_object_count.fetch_sub(1, std::memory_order_relaxed);
         delete p;
         impl = nullptr;
@@ -5924,6 +5925,7 @@ long dmsoft::FreePic(PCSTR pic_name) {
     const std::string request(pic_name);
     if (request == "*" || request == "*.*") {
         p->pic_cache.clear();
+        p->memory_pic_cache.clear();
         return 1;
     }
 
