@@ -104,6 +104,17 @@ public:
     long GetLocale() { using F=long(WINAPI*)(long); return at<F>(104336)(obj_); }
     long CheckUAC() { using F=long(WINAPI*)(long); return at<F>(113680)(obj_); }
 
+    long GetWindowState(long hwnd,long flag) { using F=long(WINAPI*)(long,long,long); return at<F>(104432)(obj_,hwnd,flag); }
+    long GetWindow(long hwnd,long flag) { using F=long(WINAPI*)(long,long,long); return at<F>(109264)(obj_,hwnd,flag); }
+    long GetForegroundFocus() { using F=long(WINAPI*)(long); return at<F>(110480)(obj_); }
+    long SetWindowState(long hwnd,long flag) { using F=long(WINAPI*)(long,long,long); return at<F>(114752)(obj_,hwnd,flag); }
+    const char *EnumProcess(PCSTR name) { using F=PCSTR(WINAPI*)(long,PCSTR); return at<F>(126688)(obj_,name); }
+    const char *EnumWindow(long parent,PCSTR title,PCSTR class_name,long filter) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR,long); return at<F>(121360)(obj_,parent,title,class_name,filter); }
+    long FindWindowByProcessId(long pid,PCSTR class_name,PCSTR title_name) { using F=long(WINAPI*)(long,long,PCSTR,PCSTR); return at<F>(113728)(obj_,pid,class_name,title_name); }
+    long FindWindowByProcess(PCSTR process_name,PCSTR class_name,PCSTR title_name) { using F=long(WINAPI*)(long,PCSTR,PCSTR,PCSTR); return at<F>(126416)(obj_,process_name,class_name,title_name); }
+    const char *EnumWindowByProcessId(long pid,PCSTR title,PCSTR class_name,long filter) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR,long); return at<F>(122400)(obj_,pid,title,class_name,filter); }
+    const char *EnumWindowByProcess(PCSTR process_name,PCSTR title,PCSTR class_name,long filter) { using F=PCSTR(WINAPI*)(long,PCSTR,PCSTR,PCSTR,long); return at<F>(124816)(obj_,process_name,title,class_name,filter); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
