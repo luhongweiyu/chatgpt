@@ -1691,6 +1691,58 @@ void test_ocr_state(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     }
 }
 
+
+void test_critical_and_password(
+    const char *legacy_path, LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    eq_num("SetPicPwd-empty",
+           old_dm.SetPicPwd(""), new_dm.SetPicPwd(""));
+    eq_num("SetPicPwd-value",
+           old_dm.SetPicPwd("pic-pass"), new_dm.SetPicPwd("pic-pass"));
+    eq_num("SetDictPwd-empty",
+           old_dm.SetDictPwd(""), new_dm.SetDictPwd(""));
+    eq_num("SetDictPwd-value",
+           old_dm.SetDictPwd("dict-pass"), new_dm.SetDictPwd("dict-pass"));
+    eq_num("SetParam64ToPointer",
+           old_dm.SetParam64ToPointer(), new_dm.SetParam64ToPointer());
+
+    LegacyRvaClient old2(legacy_path);
+    dmsoft new2;
+
+    eq_num("InitCri", old_dm.InitCri(), new_dm.InitCri());
+
+    const long old_a1 = old_dm.EnterCri();
+    const long new_a1 = new_dm.EnterCri();
+    eq_num("EnterCri-A-first", old_a1, new_a1);
+
+    const long old_a2 = old_dm.EnterCri();
+    const long new_a2 = new_dm.EnterCri();
+    eq_num("EnterCri-A-second", old_a2, new_a2);
+
+    const long old_b1 = old2.EnterCri();
+    const long new_b1 = new2.EnterCri();
+    eq_num("EnterCri-B-while-A-owned", old_b1, new_b1);
+
+    eq_num("LeaveCri-B-not-owner", old2.LeaveCri(), new2.LeaveCri());
+
+    const long old_b2 = old2.EnterCri();
+    const long new_b2 = new2.EnterCri();
+    eq_num("EnterCri-B-after-foreign-leave", old_b2, new_b2);
+
+    eq_num("LeaveCri-A", old_dm.LeaveCri(), new_dm.LeaveCri());
+
+    const long old_b3 = old2.EnterCri();
+    const long new_b3 = new2.EnterCri();
+    eq_num("EnterCri-B-after-A-leave", old_b3, new_b3);
+
+    eq_num("LeaveCri-B", old2.LeaveCri(), new2.LeaveCri());
+
+    // InitCri forcibly resets the shared signal even if an object currently owns it.
+    eq_num("EnterCri-A-before-reset", old_dm.EnterCri(), new_dm.EnterCri());
+    eq_num("InitCri-force-reset", old2.InitCri(), new2.InitCri());
+    eq_num("EnterCri-B-after-reset", old2.EnterCri(), new2.EnterCri());
+    eq_num("LeaveCri-B-after-reset", old2.LeaveCri(), new2.LeaveCri());
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1717,6 +1769,7 @@ int main(int argc, char **argv) {
         test_picture_cache_and_find(old_dm, new_dm);
         test_encoded_capture(old_dm, new_dm);
         test_ocr_state(old_dm, new_dm);
+        test_critical_and_password(legacy_path, old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_audio_aero(old_dm, new_dm);
