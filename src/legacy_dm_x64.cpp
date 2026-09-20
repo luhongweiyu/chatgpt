@@ -49,6 +49,12 @@ struct DmImpl {
     long enum_window_delay = 10000;
     bool show_error_msg = true;
     std::string global_path;
+    long keypad_delay_normal = 30;
+    long keypad_delay_windows = 10;
+    long keypad_delay_dx = 50;
+    long mouse_delay_normal = 30;
+    long mouse_delay_windows = 10;
+    long mouse_delay_dx = 40;
 };
 
 
@@ -743,6 +749,122 @@ std::string JoinPosListCompat(const std::vector<PosEntryCompat> &items) {
         out += items[i].raw;
     }
     return out;
+}
+
+
+bool IsExtendedVkCompat(long vk) {
+    switch (vk) {
+    case VK_RMENU:
+    case VK_RCONTROL:
+    case VK_INSERT:
+    case VK_DELETE:
+    case VK_HOME:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_NUMLOCK:
+    case VK_DIVIDE:
+    case VK_SNAPSHOT:
+    case VK_CANCEL:
+    case VK_LWIN:
+    case VK_RWIN:
+    case VK_APPS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+long SendKeyboardVkCompat(long vk, bool key_up) {
+    if (vk < 0 || vk > 0xFF) return 0;
+
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = static_cast<WORD>(vk);
+    input.ki.wScan = static_cast<WORD>(::MapVirtualKeyA(static_cast<UINT>(vk), MAPVK_VK_TO_VSC));
+    input.ki.dwFlags = (key_up ? KEYEVENTF_KEYUP : 0) |
+                       (IsExtendedVkCompat(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+    input.ki.time = ::GetTickCount();
+    input.ki.dwExtraInfo = ::GetMessageExtraInfo();
+    return ::SendInput(1, &input, sizeof(input)) == 1 ? 1 : 0;
+}
+
+long SendMouseCompat(DWORD flags, LONG dx = 0, LONG dy = 0, DWORD mouse_data = 0) {
+    INPUT input{};
+    input.type = INPUT_MOUSE;
+    input.mi.dx = dx;
+    input.mi.dy = dy;
+    input.mi.mouseData = mouse_data;
+    input.mi.dwFlags = flags;
+    input.mi.time = ::GetTickCount();
+    input.mi.dwExtraInfo = ::GetMessageExtraInfo();
+    return ::SendInput(1, &input, sizeof(input)) == 1 ? 1 : 0;
+}
+
+long MoveMouseAbsoluteCompat(long x, long y) {
+    const int left = ::GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int top = ::GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int width = ::GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int height = ::GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (width <= 1 || height <= 1) return 0;
+
+    const long long nx =
+        ((static_cast<long long>(x) - left) * 65535LL) / (width - 1);
+    const long long ny =
+        ((static_cast<long long>(y) - top) * 65535LL) / (height - 1);
+
+    return SendMouseCompat(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        static_cast<LONG>(nx), static_cast<LONG>(ny));
+}
+
+struct WordResultCompat {
+    std::vector<std::string> xs;
+    std::vector<std::string> ys;
+    std::vector<std::string> words;
+    bool has_first_pipe = false;
+    bool has_second_pipe = false;
+};
+
+WordResultCompat ParseWordResultCompat(PCSTR str) {
+    WordResultCompat out;
+    if (!str || !*str) return out;
+
+    const std::string text(str);
+    const size_t p1 = text.find('|');
+    if (p1 == std::string::npos) return out;
+    out.has_first_pipe = true;
+    out.xs = SplitCompat(text.substr(0, p1), ',');
+
+    const size_t p2 = text.find('|', p1 + 1);
+    if (p2 == std::string::npos) return out;
+    out.has_second_pipe = true;
+    out.ys = SplitCompat(text.substr(p1 + 1, p2 - p1 - 1), ',');
+
+    size_t begin = p2 + 1;
+    while (begin <= text.size()) {
+        const size_t p = text.find('|', begin);
+        if (p == std::string::npos) {
+            out.words.push_back(text.substr(begin));
+            break;
+        }
+        out.words.push_back(text.substr(begin, p - begin));
+        begin = p + 1;
+    }
+    return out;
+}
+
+bool ParseDecimalFieldCompat(const std::string &s, long &value) {
+    if (s.empty()) return false;
+    char *end = nullptr;
+    const long v = std::strtol(s.c_str(), &end, 10);
+    if (end == s.c_str()) return false;
+    value = v;
+    return true;
 }
 
 } // namespace
@@ -2138,6 +2260,223 @@ const char *dmsoft::SortPosDistance(PCSTR all_pos, long type, long x, long y) {
     });
 
     p->scratch = JoinPosListCompat(items);
+    return p->scratch.c_str();
+}
+
+
+long dmsoft::GetWordResultCount(PCSTR str) {
+    if (!str || !*str) return 0;
+    const std::string text(str);
+    const size_t first_pipe = text.find('|');
+    if (first_pipe == std::string::npos) return 0;
+
+    long count = 1;
+    for (size_t i = 0; i < first_pipe; ++i) {
+        if (text[i] == ',') ++count;
+    }
+    return count;
+}
+
+long dmsoft::GetWordResultPos(PCSTR str, long index, long *x, long *y) {
+    if (!x || !y) return 0;
+    *x = -1;
+    *y = -1;
+
+    const long count = GetWordResultCount(str);
+    if (index >= count) return 0;
+
+    const WordResultCompat parsed = ParseWordResultCompat(str);
+    if (!parsed.has_first_pipe) return 0;
+
+    if (index >= 0) {
+        if (static_cast<size_t>(index) < parsed.xs.size())
+            ParseDecimalFieldCompat(parsed.xs[static_cast<size_t>(index)], *x);
+        if (static_cast<size_t>(index) < parsed.ys.size())
+            ParseDecimalFieldCompat(parsed.ys[static_cast<size_t>(index)], *y);
+    }
+
+    // The original helper returns success for negative index as long as
+    // index < count; x/y remain -1.
+    return 1;
+}
+
+const char *dmsoft::GetWordResultStr(PCSTR str, long index) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    const long count = GetWordResultCount(str);
+    if (index >= count) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    const WordResultCompat parsed = ParseWordResultCompat(str);
+    if (!parsed.has_second_pipe || index < 0 ||
+        static_cast<size_t>(index) >= parsed.words.size()) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    p->scratch = parsed.words[static_cast<size_t>(index)];
+    return p->scratch.c_str();
+}
+
+long dmsoft::WaitKey(long key_code, long time_out) {
+    const DWORD start = ::GetTickCount();
+
+    if (key_code == 0) {
+        for (;;) {
+            if (time_out > 0 &&
+                static_cast<DWORD>(::GetTickCount() - start) > static_cast<DWORD>(time_out))
+                return 0;
+
+            if (::GetAsyncKeyState(VK_LBUTTON) & 0x8000) return VK_LBUTTON;
+            if (::GetAsyncKeyState(VK_RBUTTON) & 0x8000) return VK_RBUTTON;
+            if (::GetAsyncKeyState(VK_MBUTTON) & 0x8000) return VK_MBUTTON;
+            for (long vk = 8; vk < 255; ++vk) {
+                if (::GetAsyncKeyState(static_cast<int>(vk)) & 0x8000)
+                    return vk;
+            }
+            ::Sleep(1);
+        }
+    }
+
+    for (;;) {
+        if (time_out > 0 &&
+            static_cast<DWORD>(::GetTickCount() - start) > static_cast<DWORD>(time_out))
+            return 0;
+        if (::GetAsyncKeyState(static_cast<int>(key_code)) & 0x8000)
+            return 1;
+        ::Sleep(1);
+    }
+}
+
+long dmsoft::SetKeypadDelay(PCSTR type, long delay) {
+    auto *p = P(impl);
+    if (!p || !type || delay < 0) return 0;
+    if (_stricmp(type, "normal") == 0) p->keypad_delay_normal = delay;
+    else if (_stricmp(type, "windows") == 0) p->keypad_delay_windows = delay;
+    else if (_stricmp(type, "dx") == 0) p->keypad_delay_dx = delay;
+    else return 0;
+    return 1;
+}
+
+long dmsoft::SetMouseDelay(PCSTR type, long delay) {
+    auto *p = P(impl);
+    if (!p || !type || delay < 0) return 0;
+    if (_stricmp(type, "normal") == 0) p->mouse_delay_normal = delay;
+    else if (_stricmp(type, "windows") == 0) p->mouse_delay_windows = delay;
+    else if (_stricmp(type, "dx") == 0) p->mouse_delay_dx = delay;
+    else return 0;
+    return 1;
+}
+
+long dmsoft::KeyDown(long vk) {
+    return SendKeyboardVkCompat(vk, false);
+}
+
+long dmsoft::KeyUp(long vk) {
+    return SendKeyboardVkCompat(vk, true);
+}
+
+long dmsoft::KeyPress(long vk) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    if (!SendKeyboardVkCompat(vk, false)) return 0;
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->keypad_delay_normal)));
+    return SendKeyboardVkCompat(vk, true);
+}
+
+long dmsoft::LeftDown() {
+    return SendMouseCompat(MOUSEEVENTF_LEFTDOWN);
+}
+
+long dmsoft::LeftUp() {
+    return SendMouseCompat(MOUSEEVENTF_LEFTUP);
+}
+
+long dmsoft::RightDown() {
+    return SendMouseCompat(MOUSEEVENTF_RIGHTDOWN);
+}
+
+long dmsoft::RightUp() {
+    return SendMouseCompat(MOUSEEVENTF_RIGHTUP);
+}
+
+long dmsoft::MiddleDown() {
+    return SendMouseCompat(MOUSEEVENTF_MIDDLEDOWN);
+}
+
+long dmsoft::MiddleUp() {
+    return SendMouseCompat(MOUSEEVENTF_MIDDLEUP);
+}
+
+long dmsoft::LeftClick() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    if (!LeftDown()) return 0;
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    return LeftUp();
+}
+
+long dmsoft::RightClick() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    if (!RightDown()) return 0;
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    return RightUp();
+}
+
+long dmsoft::MiddleClick() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    if (!MiddleDown()) return 0;
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    return MiddleUp();
+}
+
+long dmsoft::LeftDoubleClick() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    if (!LeftClick()) return 0;
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    return LeftClick();
+}
+
+long dmsoft::WheelDown() {
+    return SendMouseCompat(
+        MOUSEEVENTF_WHEEL, 0, 0,
+        static_cast<DWORD>(static_cast<LONG>(-WHEEL_DELTA)));
+}
+
+long dmsoft::WheelUp() {
+    return SendMouseCompat(MOUSEEVENTF_WHEEL, 0, 0, WHEEL_DELTA);
+}
+
+long dmsoft::MoveTo(long x, long y) {
+    return MoveMouseAbsoluteCompat(x, y);
+}
+
+long dmsoft::MoveR(long rx, long ry) {
+    return SendMouseCompat(MOUSEEVENTF_MOVE, rx, ry);
+}
+
+const char *dmsoft::MoveToEx(long x, long y, long w, long h) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    if (w < 0) { x += w; w = -w; }
+    if (h < 0) { y += h; h = -h; }
+
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    const long tx = x + (w > 0 ? std::uniform_int_distribution<long>(0, w)(rng) : 0);
+    const long ty = y + (h > 0 ? std::uniform_int_distribution<long>(0, h)(rng) : 0);
+
+    if (!MoveTo(tx, ty)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch = std::to_string(tx) + "," + std::to_string(ty);
     return p->scratch.c_str();
 }
 
