@@ -888,8 +888,6 @@ void test_word_result_and_input(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("MoveTo-current",
            old_dm.MoveTo(pt.x, pt.y),
            new_dm.MoveTo(pt.x, pt.y));
-}
-
     const long old_char_down = old_dm.KeyDownChar("f24");
     const long old_char_up = old_dm.KeyUpChar("f24");
     const long new_char_down = new_dm.KeyDownChar("f24");
@@ -903,7 +901,7 @@ void test_word_result_and_input(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("KeyPressStr-empty",
            old_dm.KeyPressStr("", 1),
            new_dm.KeyPressStr("", 1));
-
+}
 
 } // namespace
 
