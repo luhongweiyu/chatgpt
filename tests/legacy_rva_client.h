@@ -221,6 +221,54 @@ public:
     const char *FindColorBlockEx(long x1,long y1,long x2,long y2,PCSTR color,double sim,long count,long width,long height) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double,long,long,long); return at<F>(112336)(obj_,x1,y1,x2,y2,color,sim,count,width,height); }
     long Capture(long x1,long y1,long x2,long y2,PCSTR file) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR); return at<F>(115680)(obj_,x1,y1,x2,y2,file); }
 
+    ULONG_PTR module_base() const {
+        return reinterpret_cast<ULONG_PTR>(module_);
+    }
+
+    ULONG_PTR internal_object() const {
+        return static_cast<ULONG_PTR>(static_cast<unsigned long>(obj_));
+    }
+
+    bool DumpRuntimeVtable(const char *path) const {
+#if defined(_WIN64)
+        (void)path;
+        return false;
+#else
+        if (!module_ || !obj_ || !path || !*path) return false;
+
+        const auto *object = reinterpret_cast<const ULONG_PTR *>(internal_object());
+        if (!object) return false;
+        const ULONG_PTR vtable = object[0];
+        if (!vtable) return false;
+
+        FILE *fp = nullptr;
+        if (fopen_s(&fp, path, "wb") != 0 || !fp) return false;
+
+        std::fprintf(fp, "slot,runtime_vtable,runtime_ptr,runtime_rva\r\n");
+        const ULONG_PTR base = module_base();
+        for (unsigned slot = 0; slot <= 416; ++slot) {
+            const ULONG_PTR ptr =
+                reinterpret_cast<const ULONG_PTR *>(vtable)[slot];
+            const LONGLONG rva =
+                (ptr >= base && ptr < base + 0x10000000ULL)
+                    ? static_cast<LONGLONG>(ptr - base)
+                    : -1;
+            std::fprintf(
+                fp, "%u,0x%08lX,0x%08lX,",
+                slot,
+                static_cast<unsigned long>(vtable),
+                static_cast<unsigned long>(ptr));
+            if (rva >= 0)
+                std::fprintf(fp, "0x%08llX\r\n",
+                    static_cast<unsigned long long>(rva));
+            else
+                std::fprintf(fp, "OUTSIDE\r\n");
+        }
+        std::fclose(fp);
+        return true;
+#endif
+    }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
