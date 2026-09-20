@@ -706,7 +706,47 @@ bool ParsePosEntryCompat(const std::string &raw, long type, size_t order, PosEnt
     out.order = order;
 
     if (type == 2) {
-        const auto parts = SplitCompat(raw, '
+        const auto parts = SplitCompat(raw, '$');
+        if (parts.size() < 3) return false;
+        return ParseLongCompat(parts[1], out.x) && ParseLongCompat(parts[2], out.y);
+    }
+
+    const auto parts = SplitCompat(raw, ',');
+    if (type == 1) {
+        if (parts.size() < 2) return false;
+        return ParseLongCompat(parts[0], out.x) && ParseLongCompat(parts[1], out.y);
+    }
+    if (type == 0 || type == 3) {
+        if (parts.size() < 3) return false;
+        return ParseLongCompat(parts[1], out.x) && ParseLongCompat(parts[2], out.y);
+    }
+    return false;
+}
+
+std::vector<PosEntryCompat> ParsePosListCompat(PCSTR all_pos, long type) {
+    std::vector<PosEntryCompat> out;
+    if (!all_pos || !*all_pos) return out;
+    const auto items = SplitCompat(all_pos, '|');
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (items[i].empty()) continue;
+        PosEntryCompat entry;
+        if (ParsePosEntryCompat(items[i], type, i, entry))
+            out.push_back(std::move(entry));
+    }
+    return out;
+}
+
+std::string JoinPosListCompat(const std::vector<PosEntryCompat> &items) {
+    std::string out;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (i) out.push_back('|');
+        out += items[i].raw;
+    }
+    return out;
+}
+
+} // namespace
+
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
 extern "C" HCBYJ64_API BOOL LoadDmW(PCWSTR path) { return hcbyj64::OpRuntime::ConfigureW(path) ? TRUE : FALSE; }
 extern "C" HCBYJ64_API BOOL FreeDm(void) { hcbyj64::OpRuntime::Reset(); return TRUE; }
