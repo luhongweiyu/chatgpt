@@ -17,6 +17,7 @@
 #include <winioctl.h>
 #include <mmsystem.h>
 #include <dwmapi.h>
+#include <intrin.h>
 
 #include <algorithm>
 #include <atomic>
@@ -2067,6 +2068,25 @@ std::string ExecuteCmdCompat(PCSTR cmd, PCSTR current_dir, long timeout) {
 
     (void)terminated;
     return output;
+}
+
+
+bool IntelVtEnabledCompat() {
+    int cpu[4]{};
+    __cpuid(cpu, 0);
+    char vendor[13]{};
+    std::memcpy(vendor + 0, &cpu[1], 4);
+    std::memcpy(vendor + 4, &cpu[3], 4);
+    std::memcpy(vendor + 8, &cpu[2], 4);
+    if (std::strcmp(vendor, "GenuineIntel") != 0) return false;
+
+    __cpuid(cpu, 1);
+    if ((cpu[2] & (1 << 5)) == 0) return false;
+
+#ifndef PF_VIRT_FIRMWARE_ENABLED
+#define PF_VIRT_FIRMWARE_ENABLED 21
+#endif
+    return ::IsProcessorFeaturePresent(PF_VIRT_FIRMWARE_ENABLED) != FALSE;
 }
 
 } // namespace
@@ -4494,6 +4514,18 @@ long dmsoft::SetAero(long enable) {
     const HRESULT hr = ::DwmEnableComposition(
         enable ? DWM_EC_ENABLECOMPOSITION : DWM_EC_DISABLECOMPOSITION);
     return SUCCEEDED(hr) ? 1 : 0;
+}
+
+
+long dmsoft::IsSurrpotVt() {
+    return IntelVtEnabledCompat() ? 1 : 0;
+}
+
+
+long dmsoft::SetLocale() {
+    const HINSTANCE result = ::ShellExecuteA(
+        nullptr, "open", "control.exe", "intl.cpl", nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(result) > 32 ? 1 : 0;
 }
 
 #include "legacy_dm_generated.inc"
