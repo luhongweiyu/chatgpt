@@ -2637,6 +2637,99 @@ bool ConvertImageToBmp24Compat(
     return WriteBmp24Compat(dest_path, converted);
 }
 
+
+std::string WideStringToAcpCompat(const wchar_t *text, int chars) {
+    if (!text || chars <= 0) return {};
+    const int n = ::WideCharToMultiByte(
+        CP_ACP, 0, text, chars, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    if (::WideCharToMultiByte(
+            CP_ACP, 0, text, chars, out.data(), n, nullptr, nullptr) <= 0)
+        return {};
+    return out;
+}
+
+std::string CurrentProcessDirectoryCompat() {
+    std::vector<char> buf(32768, 0);
+    const DWORD n = ::GetModuleFileNameA(
+        nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+    if (!n || n >= buf.size()) return {};
+    std::filesystem::path p(std::string(buf.data(), n));
+    return p.parent_path().string();
+}
+
+std::string QueryProcessCommandLineCompat(DWORD pid) {
+    HANDLE process = ::OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+    if (!process)
+        process = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+    if (!process) return {};
+
+    using NtQueryInformationProcessFn =
+        LONG (NTAPI *)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+
+    HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
+    auto fn = ntdll ? reinterpret_cast<NtQueryInformationProcessFn>(
+        ::GetProcAddress(ntdll, "NtQueryInformationProcess")) : nullptr;
+    if (!fn) {
+        ::CloseHandle(process);
+        return {};
+    }
+
+    constexpr PROCESSINFOCLASS kProcessCommandLineInformation =
+        static_cast<PROCESSINFOCLASS>(60);
+    ULONG needed = 0;
+    LONG status = fn(
+        process, kProcessCommandLineInformation, nullptr, 0, &needed);
+
+    if (needed == 0 || needed > 16 * 1024 * 1024) {
+        ::CloseHandle(process);
+        return {};
+    }
+
+    std::vector<unsigned char> buf(static_cast<size_t>(needed) + sizeof(wchar_t) * 2, 0);
+    status = fn(
+        process, kProcessCommandLineInformation,
+        buf.data(), static_cast<ULONG>(buf.size()), &needed);
+    ::CloseHandle(process);
+
+    if (status < 0 || buf.size() < sizeof(UNICODE_STRING)) return {};
+
+    const auto *us = reinterpret_cast<const UNICODE_STRING *>(buf.data());
+    if (!us->Buffer || us->Length == 0) return {};
+
+    const auto begin = reinterpret_cast<ULONG_PTR>(buf.data());
+    const auto end = begin + buf.size();
+    const auto ptr = reinterpret_cast<ULONG_PTR>(us->Buffer);
+
+    // ProcessCommandLineInformation normally returns the string inline in
+    // the caller-owned buffer. Validate before dereferencing.
+    if (ptr < begin || ptr + us->Length > end) return {};
+
+    return WideStringToAcpCompat(
+        us->Buffer, static_cast<int>(us->Length / sizeof(wchar_t)));
+}
+
+bool IntelVtEnabledCompat() {
+    int regs[4]{};
+    __cpuid(regs, 0);
+    char vendor[13]{};
+    std::memcpy(vendor + 0, &regs[1], 4); // EBX
+    std::memcpy(vendor + 4, &regs[3], 4); // EDX
+    std::memcpy(vendor + 8, &regs[2], 4); // ECX
+    if (std::strcmp(vendor, "GenuineIntel") != 0) return false;
+
+    __cpuid(regs, 1);
+    constexpr int kVmxBit = 1 << 5; // CPUID.1:ECX.VMX
+    if ((regs[2] & kVmxBit) == 0) return false;
+
+#ifndef PF_VIRT_FIRMWARE_ENABLED
+#define PF_VIRT_FIRMWARE_ENABLED 21
+#endif
+    return ::IsProcessorFeaturePresent(PF_VIRT_FIRMWARE_ENABLED) != FALSE;
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
