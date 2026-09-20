@@ -359,6 +359,90 @@ void test_window(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("SetClientSize-width", old_cr.right-old_cr.left, new_cr.right-new_cr.left);
     eq_num("SetClientSize-height", old_cr.bottom-old_cr.top, new_cr.bottom-new_cr.top);
 
+
+    const long state_flags[] = {0, 2, 3, 4, 5, 7, 8, 9};
+    for (long flag : state_flags)
+        eq_num(("GetWindowState-flag" + std::to_string(flag)).c_str(),
+               old_dm.GetWindowState(h, flag), new_dm.GetWindowState(h, flag));
+
+    HWND child = ::CreateWindowExA(
+        0, "STATIC", "parity-child", WS_CHILD | WS_VISIBLE,
+        5, 5, 80, 30, hwnd, nullptr, wc.hInstance, nullptr);
+    if (child) {
+        eq_num("GetWindow-parent", old_dm.GetWindow(static_cast<long>(reinterpret_cast<INT_PTR>(child)), 0),
+                                   new_dm.GetWindow(static_cast<long>(reinterpret_cast<INT_PTR>(child)), 0));
+        eq_num("GetWindow-child", old_dm.GetWindow(h, 1), new_dm.GetWindow(h, 1));
+        eq_num("GetWindow-root", old_dm.GetWindow(static_cast<long>(reinterpret_cast<INT_PTR>(child)), 7),
+                                 new_dm.GetWindow(static_cast<long>(reinterpret_cast<INT_PTR>(child)), 7));
+    }
+
+    const long pid = static_cast<long>(::GetCurrentProcessId());
+    eq_num("FindWindowByProcessId",
+           old_dm.FindWindowByProcessId(pid, cls, "parity-changed"),
+           new_dm.FindWindowByProcessId(pid, cls, "parity-changed"));
+
+    char exe_path[MAX_PATH]{};
+    ::GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+    const char *exe_name = std::strrchr(exe_path, '\\');
+    exe_name = exe_name ? exe_name + 1 : exe_path;
+
+    eq_num("FindWindowByProcess",
+           old_dm.FindWindowByProcess(exe_name, cls, "parity-changed"),
+           new_dm.FindWindowByProcess(exe_name, cls, "parity-changed"));
+
+    {
+        const char *a = old_dm.EnumWindowByProcessId(pid, "parity-changed", cls, 1 | 2);
+        const char *b = new_dm.EnumWindowByProcessId(pid, "parity-changed", cls, 1 | 2);
+        eq_str("EnumWindowByProcessId", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.EnumWindowByProcess(exe_name, "parity-changed", cls, 1 | 2);
+        const char *b = new_dm.EnumWindowByProcess(exe_name, "parity-changed", cls, 1 | 2);
+        eq_str("EnumWindowByProcess", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.EnumWindow(0, "parity-changed", cls, 1 | 2 | 8);
+        const char *b = new_dm.EnumWindow(0, "parity-changed", cls, 1 | 2 | 8);
+        eq_str("EnumWindow", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.EnumProcess(exe_name);
+        const char *b = new_dm.EnumProcess(exe_name);
+        eq_str("EnumProcess", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    // Safe SetWindowState flags only. Compare both return value and observable state.
+    const long safe_flags[] = {6, 7, 8, 9, 10, 11};
+    for (long flag : safe_flags) {
+        const long old_ret = old_dm.SetWindowState(h, flag);
+        const long old_visible = ::IsWindowVisible(hwnd) ? 1 : 0;
+        const long old_enabled = ::IsWindowEnabled(hwnd) ? 1 : 0;
+        const long old_topmost = (::GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) ? 1 : 0;
+
+        // Reset to neutral before running the recovered version.
+        ::ShowWindow(hwnd, SW_SHOWNA);
+        ::EnableWindow(hwnd, TRUE);
+        ::SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+        const long new_ret = new_dm.SetWindowState(h, flag);
+        const long new_visible = ::IsWindowVisible(hwnd) ? 1 : 0;
+        const long new_enabled = ::IsWindowEnabled(hwnd) ? 1 : 0;
+        const long new_topmost = (::GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) ? 1 : 0;
+
+        eq_num(("SetWindowState-ret-" + std::to_string(flag)).c_str(), old_ret, new_ret);
+        eq_num(("SetWindowState-visible-" + std::to_string(flag)).c_str(), old_visible, new_visible);
+        eq_num(("SetWindowState-enabled-" + std::to_string(flag)).c_str(), old_enabled, new_enabled);
+        eq_num(("SetWindowState-topmost-" + std::to_string(flag)).c_str(), old_topmost, new_topmost);
+
+        ::ShowWindow(hwnd, SW_SHOWNA);
+        ::EnableWindow(hwnd, TRUE);
+        ::SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    if (child) ::DestroyWindow(child);
+
     ::DestroyWindow(hwnd);
     ::UnregisterClassA(cls, wc.hInstance);
 }
