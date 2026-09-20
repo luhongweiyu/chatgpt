@@ -48,6 +48,13 @@ namespace {
 
 struct ScreenImageCompat;
 
+struct ExcludeRegionCompat {
+    long x1 = 0;
+    long y1 = 0;
+    long x2 = 0;
+    long y2 = 0;
+};
+
 struct DmImpl {
     hcbyj64::OpObject op;
     bool hwnd_is_pid = false;
@@ -81,6 +88,8 @@ struct DmImpl {
     bool find_pic_multithread_enabled = true;
     long find_pic_multithread_count = 4;
     long find_pic_multithread_limit = 0;
+    std::vector<ExcludeRegionCompat> exclude_regions;
+    unsigned int exclude_region_rgb = 0xFF00FF;
 
     // OCR / dictionary state. Keep the legacy defaults so x86 parity can
     // validate behavior before the recognition engine itself is migrated.
@@ -1727,6 +1736,50 @@ bool CaptureScreenRegionCompat(long x1, long y1, long x2, long y2, ScreenImageCo
     return ok;
 }
 
+
+bool CaptureScreenRegionForObjectCompat(
+    DmImpl *p, long x1, long y1, long x2, long y2, ScreenImageCompat &out) {
+    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, out)) return false;
+    if (!p) return true;
+
+    std::vector<ExcludeRegionCompat> regions;
+    unsigned int rgb = 0xFF00FF;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        regions = p->exclude_regions;
+        rgb = p->exclude_region_rgb;
+    }
+    if (regions.empty()) return true;
+
+    RgbColorCompat replacement{};
+    replacement.r = static_cast<unsigned char>((rgb >> 16) & 0xFF);
+    replacement.g = static_cast<unsigned char>((rgb >> 8) & 0xFF);
+    replacement.b = static_cast<unsigned char>(rgb & 0xFF);
+
+    const long image_x2 = out.x + out.width - 1;
+    const long image_y2 = out.y + out.height - 1;
+    for (const auto &r : regions) {
+        const long left = std::max(out.x, std::min(r.x1, r.x2));
+        const long top = std::max(out.y, std::min(r.y1, r.y2));
+        const long right = std::min(image_x2, std::max(r.x1, r.x2));
+        const long bottom = std::min(image_y2, std::max(r.y1, r.y2));
+        if (left > right || top > bottom) continue;
+
+        for (long y = top; y <= bottom; ++y) {
+            const size_t row =
+                static_cast<size_t>(y - out.y) *
+                static_cast<size_t>(out.width);
+            for (long x = left; x <= right; ++x) {
+                out.pixels[row + static_cast<size_t>(x - out.x)] = replacement;
+            }
+        }
+    }
+
+    // CapturePre and later image consumers should see the same modified frame.
+    g_last_graphic_capture = std::make_shared<ScreenImageCompat>(out);
+    return true;
+}
+
 bool ReadScreenPixelCompat(DmImpl *p, long x, long y, RgbColorCompat &out) {
     if (p && p->get_color_by_capture) {
         ScreenImageCompat image;
@@ -2734,7 +2787,7 @@ std::vector<PicSearchResultCompat> FindPicsAllCompat(
     if (refs.empty()) return out;
 
     ScreenImageCompat screen;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, screen)) return out;
+    if (!CaptureScreenRegionForObjectCompat(p, x1, y1, x2, y2, screen)) return out;
 
     struct Loaded {
         PicRefCompat ref;
@@ -4981,7 +5034,7 @@ const char *dmsoft::GetAveRGB(long x1, long y1, long x2, long y2) {
     auto *p = P(impl);
     if (!p) return "";
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) {
         p->scratch.clear();
         return p->scratch.c_str();
     }
@@ -4993,7 +5046,7 @@ const char *dmsoft::GetAveHSV(long x1, long y1, long x2, long y2) {
     auto *p = P(impl);
     if (!p) return "";
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) {
         p->scratch.clear();
         return p->scratch.c_str();
     }
@@ -5017,7 +5070,7 @@ long dmsoft::GetColorNum(
     ColorSpecCompat spec;
     if (!ParseColorSpecCompat(color, spec)) return 0;
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
 
     long count = 0;
     for (const auto &pixel : image.pixels) {
@@ -5039,7 +5092,7 @@ long dmsoft::FindColor(
     ColorSpecCompat spec;
     if (!ParseColorSpecCompat(color, spec)) return 0;
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
 
     long found_x = -1, found_y = -1;
     const bool found = ForEachPointInDirectionCompat(
@@ -5078,7 +5131,7 @@ const char *dmsoft::FindColorEx(
     ColorSpecCompat spec;
     ScreenImageCompat image;
     if (!ParseColorSpecCompat(color, spec) ||
-        !CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        !CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) {
         p->scratch.clear();
         return p->scratch.c_str();
     }
@@ -5115,7 +5168,7 @@ long dmsoft::FindMultiColor(
         return 0;
 
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
 
     long found_x = -1, found_y = -1;
     const bool found = ForEachPointInDirectionCompat(
@@ -5158,7 +5211,7 @@ const char *dmsoft::FindMultiColorEx(
     ScreenImageCompat image;
     if (!ParseColorSpecCompat(first_color, first) ||
         !ParseMultiColorOffsetsCompat(offset_color, offsets) ||
-        !CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        !CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) {
         p->scratch.clear();
         return p->scratch.c_str();
     }
@@ -5188,7 +5241,7 @@ long dmsoft::FindShape(
     std::vector<ShapeOffsetCompat> offsets;
     if (!ParseShapeOffsetsCompat(offset_color, offsets)) return 0;
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
 
     long found_x = -1, found_y = -1;
     const bool found = ForEachPointInDirectionCompat(
@@ -5226,7 +5279,7 @@ const char *dmsoft::FindShapeEx(
     std::vector<ShapeOffsetCompat> offsets;
     ScreenImageCompat image;
     if (!ParseShapeOffsetsCompat(offset_color, offsets) ||
-        !CaptureScreenRegionCompat(x1, y1, x2, y2, image)) {
+        !CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) {
         p->scratch.clear();
         return p->scratch.c_str();
     }
@@ -5259,7 +5312,7 @@ long dmsoft::FindMulColor(
     const auto tokens = SplitCompat(source, '|');
     if (tokens.empty()) return 0;
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
 
     if (inverse) {
         ColorSpecCompat spec{};
@@ -5297,7 +5350,7 @@ long dmsoft::FindColorBlock(
     ColorSpecCompat spec{};
     ScreenImageCompat image;
     if (!ParseColorSpecCompat(color, spec) ||
-        !CaptureScreenRegionCompat(x1, y1, x2, y2, image) ||
+        !CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image) ||
         width > image.width || height > image.height)
         return 0;
 
@@ -5327,7 +5380,7 @@ const char *dmsoft::FindColorBlockEx(
     ColorSpecCompat spec{};
     ScreenImageCompat image;
     if (!ParseColorSpecCompat(color, spec) ||
-        !CaptureScreenRegionCompat(x1, y1, x2, y2, image) ||
+        !CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image) ||
         width > image.width || height > image.height)
         return p->scratch.c_str();
 
@@ -5354,7 +5407,7 @@ long dmsoft::Capture(
     auto *p = P(impl);
     if (!p) return 0;
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
     const auto path = ResolveObjectFilePathCompat(p, file);
     if (path.empty()) return 0;
     return WriteBmp24Compat(path, image) ? 1 : 0;
@@ -5850,7 +5903,7 @@ long dmsoft::CapturePng(
     auto *p = P(impl);
     if (!p) return 0;
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
     const auto path = ResolveObjectFilePathCompat(p, file);
     if (path.empty()) return 0;
     return SaveScreenImageEncodedCompat(
@@ -5864,7 +5917,7 @@ long dmsoft::CaptureJpg(
     auto *p = P(impl);
     if (!p || quality < 1 || quality > 100) return 0;
     ScreenImageCompat image;
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, image)) return 0;
+    if (!CaptureScreenRegionForObjectCompat(P(impl), x1, y1, x2, y2, image)) return 0;
     const auto path = ResolveObjectFilePathCompat(p, file);
     if (path.empty()) return 0;
     return SaveScreenImageEncodedCompat(
@@ -6377,6 +6430,50 @@ long dmsoft::WriteDataFromBin(
     if (!ResolveAddressExprCompat(P(impl), hwnd, addr, resolved))
         return 0;
     return WriteDataAddrFromBin(hwnd, resolved, data, len);
+}
+
+
+long dmsoft::SetExcludeRegion(long type, PCSTR info) {
+    auto *p = P(impl);
+    if (!p) return 0;
+
+    if (type == 2) {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        p->exclude_regions.clear();
+        return 1;
+    }
+
+    if (type == 1) {
+        if (!info) return 0;
+        const std::string text(info);
+        if (text.size() != 6) return 0;
+        char *end = nullptr;
+        const unsigned long value = std::strtoul(text.c_str(), &end, 16);
+        if (!end || *end != '\0' || value > 0xFFFFFFUL) return 0;
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        p->exclude_region_rgb = static_cast<unsigned int>(value);
+        return 1;
+    }
+
+    if (type != 0 || !info || !*info) return 0;
+
+    std::vector<ExcludeRegionCompat> parsed;
+    for (const auto &token : SplitCompat(info, '|')) {
+        if (token.empty()) continue;
+        long x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+        char tail = 0;
+        if (std::sscanf(
+                token.c_str(), "%ld,%ld,%ld,%ld%c",
+                &x1, &y1, &x2, &y2, &tail) != 4)
+            return 0;
+        parsed.push_back({x1, y1, x2, y2});
+    }
+    if (parsed.empty()) return 0;
+
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->exclude_regions.insert(
+        p->exclude_regions.end(), parsed.begin(), parsed.end());
+    return 1;
 }
 
 #include "legacy_dm_generated.inc"
