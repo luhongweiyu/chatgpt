@@ -95,11 +95,16 @@ struct DmImpl {
     long nodict_col_gap = 1;
     long nodict_word_gap = 5;
     long nodict_word_line_height = 10;
+    std::string pic_password;
+    std::string dict_password;
+    bool param64_to_pointer = false;
 };
 
 
 std::atomic<long> g_next_dm_id{1};
 std::atomic<long> g_dm_object_count{0};
+std::mutex g_cri_mutex;
+DmImpl *g_cri_owner = nullptr;
 
 std::string ModuleDirectoryCompat(bool current_dll) {
     HMODULE module = nullptr;
@@ -5545,6 +5550,51 @@ long dmsoft::SetWordLineHeightNoDict(long line_height) {
     auto *p = P(impl);
     if (!p) return 0;
     p->nodict_word_line_height = line_height;
+    return 1;
+}
+
+
+long dmsoft::InitCri() {
+    std::lock_guard<std::mutex> lock(g_cri_mutex);
+    g_cri_owner = nullptr;
+    return 1;
+}
+
+long dmsoft::EnterCri() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    std::lock_guard<std::mutex> lock(g_cri_mutex);
+    if (g_cri_owner != nullptr) return 0;
+    g_cri_owner = p;
+    return 1;
+}
+
+long dmsoft::LeaveCri() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    std::lock_guard<std::mutex> lock(g_cri_mutex);
+    if (g_cri_owner == p) g_cri_owner = nullptr;
+    return 1;
+}
+
+long dmsoft::SetPicPwd(PCSTR pwd) {
+    auto *p = P(impl);
+    if (!p || !pwd) return 0;
+    p->pic_password = pwd;
+    return 1;
+}
+
+long dmsoft::SetDictPwd(PCSTR pwd) {
+    auto *p = P(impl);
+    if (!p || !pwd) return 0;
+    p->dict_password = pwd;
+    return 1;
+}
+
+long dmsoft::SetParam64ToPointer() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    p->param64_to_pointer = true;
     return 1;
 }
 
