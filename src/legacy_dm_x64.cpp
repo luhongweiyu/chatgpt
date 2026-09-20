@@ -4873,4 +4873,292 @@ long dmsoft::SetLocale() {
     return reinterpret_cast<INT_PTR>(result) > 32 ? 1 : 0;
 }
 
+
+long dmsoft::EnablePicCache(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->pic_cache_enabled = en != 0;
+    return 1;
+}
+
+const char *dmsoft::MatchPicName(PCSTR pic_name) {
+    auto *p = P(impl);
+    if (!p) return "";
+    const auto refs = ExpandPicRefsCompat(p, pic_name);
+    std::ostringstream oss;
+    for (size_t i = 0; i < refs.size(); ++i) {
+        if (i) oss << '|';
+        oss << refs[i].display;
+    }
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::LoadPic(PCSTR pic_name) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    const auto refs = ExpandPicRefsCompat(p, pic_name);
+    if (refs.empty()) return 0;
+
+    for (const auto &ref : refs) {
+        auto image = LoadPicCachedCompat(p, ref.path);
+        if (!image) return 0;
+        if (p->pic_cache_enabled) {
+            std::lock_guard<std::mutex> lock(p->state_mutex);
+            p->pic_cache[LowerPathKeyCompat(ref.path)] = image;
+        }
+    }
+    return 1;
+}
+
+long dmsoft::FreePic(PCSTR pic_name) {
+    auto *p = P(impl);
+    if (!p || !pic_name || !*pic_name) return 0;
+
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    const std::string request(pic_name);
+    if (request == "*" || request == "*.*") {
+        p->pic_cache.clear();
+        return 1;
+    }
+
+    long removed = 0;
+    for (const auto &token : SplitCompat(request, '|')) {
+        if (token.empty()) continue;
+
+        if (!HasWildcardCompat(token)) {
+            const auto full = ResolveObjectFilePathCompat(p, token.c_str());
+            removed += static_cast<long>(
+                p->pic_cache.erase(LowerPathKeyCompat(full)));
+            continue;
+        }
+
+        const auto slash = token.find_last_of("\\/");
+        const std::string pattern =
+            slash == std::string::npos ? token : token.substr(slash + 1);
+        const std::filesystem::path base =
+            slash == std::string::npos
+                ? std::filesystem::path(p->global_path)
+                : ResolveObjectFilePathCompat(
+                      p, token.substr(0, slash).c_str());
+
+        std::vector<std::string> erase_keys;
+        for (const auto &entry : p->pic_cache) {
+            const std::filesystem::path cached(entry.first);
+            if (!base.empty()) {
+                std::error_code ec;
+                const auto parent_abs =
+                    std::filesystem::absolute(cached.parent_path(), ec)
+                        .lexically_normal();
+                const auto base_abs =
+                    std::filesystem::absolute(base, ec).lexically_normal();
+                if (!ec && parent_abs != base_abs) continue;
+            }
+
+            WIN32_FIND_DATAA fd{};
+            const std::string probe =
+                (cached.parent_path() / pattern).string();
+            HANDLE h = ::FindFirstFileA(probe.c_str(), &fd);
+            if (h == INVALID_HANDLE_VALUE) continue;
+            bool matched = false;
+            do {
+                if (_stricmp(
+                        fd.cFileName,
+                        cached.filename().string().c_str()) == 0) {
+                    matched = true;
+                    break;
+                }
+            } while (::FindNextFileA(h, &fd));
+            ::FindClose(h);
+            if (matched) erase_keys.push_back(entry.first);
+        }
+        for (const auto &key : erase_keys) {
+            removed += static_cast<long>(p->pic_cache.erase(key));
+        }
+    }
+    return removed > 0 ? 1 : 0;
+}
+
+const char *dmsoft::GetPicSize(PCSTR pic_name) {
+    auto *p = P(impl);
+    if (!p) return "";
+    const auto refs = ExpandPicRefsCompat(p, pic_name);
+    if (refs.empty()) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    auto image = LoadPicCachedCompat(p, refs.front().path);
+    if (!image) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch =
+        std::to_string(image->width) + "," + std::to_string(image->height);
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindPic(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    double sim, long dir, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y) return -1;
+
+    auto *p = P(impl);
+    if (!p) return -1;
+    const long threshold = static_cast<long>(
+        std::ceil(std::clamp(sim, 0.0, 1.0) * 100.0));
+    const auto found = FindPicFirstCompat(
+        p, x1, y1, x2, y2, pic_name, delta_color,
+        threshold, dir);
+    if (!found) return -1;
+
+    *x = found->x;
+    *y = found->y;
+    return found->index;
+}
+
+const char *dmsoft::FindPicE(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    const long index = FindPic(
+        x1, y1, x2, y2, pic_name, delta_color,
+        sim, dir, &x, &y);
+    p->scratch =
+        std::to_string(index) + "|" +
+        std::to_string(x) + "|" + std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindPicEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    const long threshold = static_cast<long>(
+        std::ceil(std::clamp(sim, 0.0, 1.0) * 100.0));
+    const auto matches = FindPicsAllCompat(
+        p, x1, y1, x2, y2, pic_name, delta_color,
+        threshold, dir, 1500);
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (i) oss << '|';
+        oss << matches[i].index << ','
+            << matches[i].x << ',' << matches[i].y;
+    }
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindPicS(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    double sim, long dir, long *x, long *y) {
+    auto *p = P(impl);
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!p || !x || !y) return "";
+
+    const long threshold = static_cast<long>(
+        std::ceil(std::clamp(sim, 0.0, 1.0) * 100.0));
+    const auto found = FindPicFirstCompat(
+        p, x1, y1, x2, y2, pic_name, delta_color,
+        threshold, dir);
+    if (!found) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    *x = found->x;
+    *y = found->y;
+    p->scratch = found->display;
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindPicExS(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    double sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    const long threshold = static_cast<long>(
+        std::ceil(std::clamp(sim, 0.0, 1.0) * 100.0));
+    const auto matches = FindPicsAllCompat(
+        p, x1, y1, x2, y2, pic_name, delta_color,
+        threshold, dir, 1500);
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (i) oss << '|';
+        oss << matches[i].display << ','
+            << matches[i].x << ',' << matches[i].y;
+    }
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindPicSim(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    long sim, long dir, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!x || !y || sim < 0 || sim > 100) return -1;
+
+    auto *p = P(impl);
+    if (!p) return -1;
+    const auto found = FindPicFirstCompat(
+        p, x1, y1, x2, y2, pic_name, delta_color,
+        sim, dir);
+    if (!found) return -1;
+    *x = found->x;
+    *y = found->y;
+    return found->index;
+}
+
+const char *dmsoft::FindPicSimE(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    long sim, long dir) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    const long index = FindPicSim(
+        x1, y1, x2, y2, pic_name, delta_color,
+        sim, dir, &x, &y);
+    p->scratch =
+        std::to_string(index) + "|" +
+        std::to_string(x) + "|" + std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindPicSimEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR delta_color,
+    long sim, long dir) {
+    auto *p = P(impl);
+    if (!p || sim < 0 || sim > 100) return "";
+    const auto matches = FindPicsAllCompat(
+        p, x1, y1, x2, y2, pic_name, delta_color,
+        sim, dir, 1500);
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < matches.size(); ++i) {
+        if (i) oss << '|';
+        oss << matches[i].index << ','
+            << matches[i].score << ','
+            << matches[i].x << ',' << matches[i].y;
+    }
+    p->scratch = oss.str();
+    return p->scratch.c_str();
+}
+
 #include "legacy_dm_generated.inc"
