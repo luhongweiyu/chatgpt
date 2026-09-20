@@ -4,9 +4,12 @@ import re
 header = Path(__file__).resolve().parents[1] / "include" / "legacy_dm_x64.h"
 source = Path(__file__).resolve().parents[1] / "src" / "legacy_dm_x64.cpp"
 h = header.read_text(encoding="utf-8-sig", errors="ignore")
+for inc in sorted(header.parent.glob("legacy_dm_x64_decl*.inc")):
+    h += "\n" + inc.read_text(encoding="utf-8-sig", errors="ignore")
 s = source.read_text(encoding="utf-8-sig", errors="ignore")
-for inc in sorted(source.parent.glob("legacy_dm_x64_part*.inc")):
-    s += "\n" + inc.read_text(encoding="utf-8-sig", errors="ignore")
+generated = source.parent.parent / "build" / "generated" / "legacy_dm_generated.inc"
+if generated.exists():
+    s += "\n" + generated.read_text(encoding="utf-8-sig", errors="ignore")
 declared = []
 for line in h.splitlines():
     line = line.strip()
