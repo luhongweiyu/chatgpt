@@ -313,6 +313,18 @@ public:
     long SetParam64ToPointer() { using F=long(WINAPI*)(long); return at<F>(111200)(obj_); }
     long IsSurrpotVt() { using F=long(WINAPI*)(long); return at<F>(101760)(obj_); }
 
+    const char *FindInt(long hwnd,PCSTR range,LONGLONG minv,LONGLONG maxv,long type) { using F=PCSTR(WINAPI*)(long,long,PCSTR,LONGLONG,LONGLONG,long); return at<F>(114224)(obj_,hwnd,range,minv,maxv,type); }
+    const char *FindIntEx(long hwnd,PCSTR range,LONGLONG minv,LONGLONG maxv,long type,long step,long mt,long mode) { using F=PCSTR(WINAPI*)(long,long,PCSTR,LONGLONG,LONGLONG,long,long,long,long); return at<F>(105488)(obj_,hwnd,range,minv,maxv,type,step,mt,mode); }
+    const char *FindFloat(long hwnd,PCSTR range,float minv,float maxv) { using F=PCSTR(WINAPI*)(long,long,PCSTR,float,float); return at<F>(117936)(obj_,hwnd,range,minv,maxv); }
+    const char *FindFloatEx(long hwnd,PCSTR range,float minv,float maxv,long step,long mt,long mode) { using F=PCSTR(WINAPI*)(long,long,PCSTR,float,float,long,long,long); return at<F>(117024)(obj_,hwnd,range,minv,maxv,step,mt,mode); }
+    const char *FindDouble(long hwnd,PCSTR range,double minv,double maxv) { using F=PCSTR(WINAPI*)(long,long,PCSTR,double,double); return at<F>(119808)(obj_,hwnd,range,minv,maxv); }
+    const char *FindDoubleEx(long hwnd,PCSTR range,double minv,double maxv,long step,long mt,long mode) { using F=PCSTR(WINAPI*)(long,long,PCSTR,double,double,long,long,long); return at<F>(119504)(obj_,hwnd,range,minv,maxv,step,mt,mode); }
+    const char *FindData(long hwnd,PCSTR range,PCSTR data) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR); return at<F>(112512)(obj_,hwnd,range,data); }
+    const char *FindDataEx(long hwnd,PCSTR range,PCSTR data,long step,long mt,long mode) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR,long,long,long); return at<F>(119952)(obj_,hwnd,range,data,step,mt,mode); }
+    const char *FindString(long hwnd,PCSTR range,PCSTR value,long type) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR,long); return at<F>(103104)(obj_,hwnd,range,value,type); }
+    const char *FindStringEx(long hwnd,PCSTR range,PCSTR value,long type,long step,long mt,long mode) { using F=PCSTR(WINAPI*)(long,long,PCSTR,PCSTR,long,long,long,long); return at<F>(116608)(obj_,hwnd,range,value,type,step,mt,mode); }
+    long SetMemoryFindResultToFile(PCSTR file) { using F=long(WINAPI*)(long,PCSTR); return at<F>(110736)(obj_,file); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
