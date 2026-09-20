@@ -190,6 +190,194 @@ std::string JoinMultiSz(const char *buf, size_t cap) {
     return out;
 }
 
+
+bool ProcessIs64BitCompat(DWORD pid) {
+    HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return false;
+
+    using IsWow64Process2Fn = BOOL (WINAPI *)(HANDLE, USHORT *, USHORT *);
+    auto kernel = ::GetModuleHandleW(L"kernel32.dll");
+    auto is_wow64_2 = kernel
+        ? reinterpret_cast<IsWow64Process2Fn>(::GetProcAddress(kernel, "IsWow64Process2"))
+        : nullptr;
+
+    bool result = false;
+    if (is_wow64_2) {
+        USHORT process_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+        USHORT native_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+        if (is_wow64_2(process, &process_machine, &native_machine)) {
+            result = process_machine == IMAGE_FILE_MACHINE_UNKNOWN &&
+                     (native_machine == IMAGE_FILE_MACHINE_AMD64 ||
+                      native_machine == IMAGE_FILE_MACHINE_ARM64 ||
+                      native_machine == IMAGE_FILE_MACHINE_IA64);
+        }
+    } else {
+        BOOL target_wow64 = FALSE;
+        BOOL self_wow64 = FALSE;
+        if (::IsWow64Process(process, &target_wow64) &&
+            ::IsWow64Process(::GetCurrentProcess(), &self_wow64)) {
+#if defined(_WIN64)
+            result = !target_wow64;
+#else
+            result = self_wow64 && !target_wow64;
+#endif
+        }
+    }
+
+    ::CloseHandle(process);
+    return result;
+}
+
+bool ContainsNoCaseCompat(const std::string &haystack, const std::string &needle) {
+    if (needle.empty()) return true;
+    auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+    std::string h(haystack), n(needle);
+    std::transform(h.begin(), h.end(), h.begin(), lower);
+    std::transform(n.begin(), n.end(), n.begin(), lower);
+    return h.find(n) != std::string::npos;
+}
+
+std::string WindowTextCompat(HWND hwnd) {
+    const int n = ::GetWindowTextLengthA(hwnd);
+    if (n <= 0) return {};
+    std::vector<char> buf(static_cast<size_t>(n) + 1, 0);
+    ::GetWindowTextA(hwnd, buf.data(), static_cast<int>(buf.size()));
+    return buf.data();
+}
+
+std::string WindowClassCompat(HWND hwnd) {
+    char buf[512]{};
+    if (::GetClassNameA(hwnd, buf, static_cast<int>(sizeof(buf))) <= 0) return {};
+    return buf;
+}
+
+bool WindowMatchesCompat(HWND hwnd, PCSTR title, PCSTR class_name, long filter) {
+    if ((filter & 16) && !::IsWindowVisible(hwnd)) return false;
+
+    if ((filter & 1) && title && *title) {
+        if (!ContainsNoCaseCompat(WindowTextCompat(hwnd), title)) return false;
+    }
+    if ((filter & 2) && class_name && *class_name) {
+        if (!ContainsNoCaseCompat(WindowClassCompat(hwnd), class_name)) return false;
+    }
+    return true;
+}
+
+std::string JoinHwndsCompat(const std::vector<HWND> &windows) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < windows.size(); ++i) {
+        if (i) oss << ',';
+        oss << static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(windows[i]));
+    }
+    return oss.str();
+}
+
+struct EnumWindowCompatContext {
+    DWORD pid = 0;
+    PCSTR title = nullptr;
+    PCSTR class_name = nullptr;
+    long filter = 0;
+    std::vector<HWND> *out = nullptr;
+};
+
+BOOL CALLBACK EnumWindowCompatProc(HWND hwnd, LPARAM lp) {
+    auto *ctx = reinterpret_cast<EnumWindowCompatContext *>(lp);
+    if (!ctx || !ctx->out) return FALSE;
+
+    if (ctx->pid != 0) {
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(hwnd, &pid);
+        if (pid != ctx->pid) return TRUE;
+    }
+
+    if (WindowMatchesCompat(hwnd, ctx->title, ctx->class_name, ctx->filter))
+        ctx->out->push_back(hwnd);
+    return TRUE;
+}
+
+void EnumDirectChildrenCompat(HWND parent, EnumWindowCompatContext &ctx) {
+    for (HWND child = ::FindWindowExA(parent, nullptr, nullptr, nullptr);
+         child != nullptr;
+         child = ::FindWindowExA(parent, child, nullptr, nullptr)) {
+        if (ctx.pid != 0) {
+            DWORD pid = 0;
+            ::GetWindowThreadProcessId(child, &pid);
+            if (pid != ctx.pid) continue;
+        }
+        if (WindowMatchesCompat(child, ctx.title, ctx.class_name, ctx.filter))
+            ctx.out->push_back(child);
+    }
+}
+
+std::vector<HWND> EnumWindowsCompat(
+    HWND parent, DWORD pid, PCSTR title, PCSTR class_name, long filter) {
+    std::vector<HWND> out;
+    EnumWindowCompatContext ctx{pid, title, class_name, filter, &out};
+
+    if (parent) {
+        if (filter & 4) EnumDirectChildrenCompat(parent, ctx);
+        else ::EnumChildWindows(parent, EnumWindowCompatProc, reinterpret_cast<LPARAM>(&ctx));
+    } else {
+        ::EnumWindows(EnumWindowCompatProc, reinterpret_cast<LPARAM>(&ctx));
+    }
+
+    if (filter & 32) {
+        std::stable_sort(out.begin(), out.end(), [](HWND a, HWND b) {
+            return reinterpret_cast<ULONG_PTR>(a) < reinterpret_cast<ULONG_PTR>(b);
+        });
+    }
+    return out;
+}
+
+ULONGLONG ProcessCreateTimeCompat(DWORD pid) {
+    HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return std::numeric_limits<ULONGLONG>::max();
+    FILETIME create{}, exit{}, kernel{}, user{};
+    ULONGLONG value = std::numeric_limits<ULONGLONG>::max();
+    if (::GetProcessTimes(process, &create, &exit, &kernel, &user))
+        value = FileTime64(create);
+    ::CloseHandle(process);
+    return value;
+}
+
+std::vector<DWORD> EnumProcessIdsCompat(PCSTR process_name) {
+    std::vector<std::pair<ULONGLONG, DWORD>> matches;
+    HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return {};
+
+    PROCESSENTRY32 pe{};
+    pe.dwSize = sizeof(pe);
+    if (::Process32First(snap, &pe)) {
+        do {
+            const bool name_ok =
+                !process_name || !*process_name || _stricmp(pe.szExeFile, process_name) == 0;
+            if (name_ok)
+                matches.emplace_back(ProcessCreateTimeCompat(pe.th32ProcessID), pe.th32ProcessID);
+        } while (::Process32Next(snap, &pe));
+    }
+    ::CloseHandle(snap);
+
+    std::stable_sort(matches.begin(), matches.end(),
+        [](const auto &a, const auto &b) {
+            if (a.first != b.first) return a.first < b.first;
+            return a.second < b.second;
+        });
+
+    std::vector<DWORD> out;
+    out.reserve(matches.size());
+    for (const auto &v : matches) out.push_back(v.second);
+    return out;
+}
+
+std::string JoinPidsCompat(const std::vector<DWORD> &pids) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < pids.size(); ++i) {
+        if (i) oss << ',';
+        oss << pids[i];
+    }
+    return oss.str();
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -891,6 +1079,199 @@ long dmsoft::CheckUAC() {
         &value,
         &size);
     return st == ERROR_SUCCESS && value != 0 ? 1 : 0;
+}
+
+
+long dmsoft::GetWindowState(long hwnd, long flag) {
+    const HWND h = HwndFromLong(hwnd);
+    if (!h) return 0;
+
+    switch (flag) {
+    case 0:
+        return ::IsWindow(h) ? 1 : 0;
+    case 1:
+        return ::GetForegroundWindow() == h ? 1 : 0;
+    case 2:
+        return ::IsWindowVisible(h) ? 1 : 0;
+    case 3:
+        return ::IsIconic(h) ? 1 : 0;
+    case 4:
+        return ::IsZoomed(h) ? 1 : 0;
+    case 5:
+        return (::GetWindowLongPtr(h, GWL_EXSTYLE) & WS_EX_TOPMOST) ? 1 : 0;
+    case 6:
+        return ::IsHungAppWindow(h) ? 1 : 0;
+    case 7:
+        return ::IsWindowEnabled(h) ? 1 : 0;
+    case 8: {
+        DWORD_PTR result = 0;
+        const LRESULT ok = ::SendMessageTimeoutA(
+            h, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &result);
+        return ok ? 0 : 1;
+    }
+    case 9: {
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(h, &pid);
+        return pid && ProcessIs64BitCompat(pid) ? 1 : 0;
+    }
+    default:
+        return 0;
+    }
+}
+
+long dmsoft::GetWindow(long hwnd, long flag) {
+    const HWND h = HwndFromLong(hwnd);
+    HWND result = nullptr;
+    switch (flag) {
+    case 0: result = ::GetParent(h); break;
+    case 1: result = ::GetWindow(h, GW_CHILD); break;
+    case 2: result = ::GetWindow(h, GW_HWNDFIRST); break;
+    case 3: result = ::GetWindow(h, GW_HWNDLAST); break;
+    case 4: result = ::GetWindow(h, GW_HWNDNEXT); break;
+    case 5: result = ::GetWindow(h, GW_HWNDPREV); break;
+    case 6: result = ::GetWindow(h, GW_OWNER); break;
+    case 7: result = ::GetAncestor(h, GA_ROOT); break;
+    default: break;
+    }
+    return static_cast<long>(reinterpret_cast<INT_PTR>(result));
+}
+
+long dmsoft::GetForegroundFocus() {
+    HWND foreground = ::GetForegroundWindow();
+    if (!foreground) return 0;
+
+    const DWORD tid = ::GetWindowThreadProcessId(foreground, nullptr);
+    GUITHREADINFO info{};
+    info.cbSize = sizeof(info);
+    if (!tid || !::GetGUIThreadInfo(tid, &info)) return 0;
+    return static_cast<long>(reinterpret_cast<INT_PTR>(info.hwndFocus));
+}
+
+long dmsoft::SetWindowState(long hwnd, long flag) {
+    HWND h = HwndFromLong(hwnd);
+    if (!::IsWindow(h)) return 0;
+
+    switch (flag) {
+    case 0:
+        return ::PostMessageA(h, WM_CLOSE, 0, 0) ? 1 : 0;
+    case 1:
+        ::ShowWindow(h, SW_SHOW);
+        return ::SetForegroundWindow(h) ? 1 : 0;
+    case 2:
+        return ::ShowWindow(h, SW_MINIMIZE) ? 1 : 1;
+    case 3: {
+        ::ShowWindow(h, SW_MINIMIZE);
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(h, &pid);
+        HANDLE process = pid ? ::OpenProcess(PROCESS_SET_QUOTA, FALSE, pid) : nullptr;
+        if (process) {
+            ::SetProcessWorkingSetSize(process, static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+            ::CloseHandle(process);
+        }
+        ::SetForegroundWindow(h);
+        return 1;
+    }
+    case 4:
+        ::ShowWindow(h, SW_MAXIMIZE);
+        ::SetForegroundWindow(h);
+        return 1;
+    case 5:
+        ::ShowWindow(h, SW_SHOWNOACTIVATE);
+        return 1;
+    case 6:
+        ::ShowWindow(h, SW_HIDE);
+        return 1;
+    case 7:
+        ::ShowWindow(h, SW_SHOWNA);
+        return 1;
+    case 8:
+        return ::SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
+                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) ? 1 : 0;
+    case 9:
+        return ::SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0,
+                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) ? 1 : 0;
+    case 10:
+        return ::EnableWindow(h, FALSE) ? 1 : 1;
+    case 11:
+        return ::EnableWindow(h, TRUE) ? 1 : 1;
+    case 12:
+        ::ShowWindow(h, SW_RESTORE);
+        ::SetForegroundWindow(h);
+        return 1;
+    case 13: {
+        DWORD pid = 0;
+        ::GetWindowThreadProcessId(h, &pid);
+        HANDLE process = pid ? ::OpenProcess(PROCESS_TERMINATE, FALSE, pid) : nullptr;
+        if (!process) return 0;
+        const BOOL ok = ::TerminateProcess(process, 0);
+        ::CloseHandle(process);
+        return ok ? 1 : 0;
+    }
+    case 14:
+        return ::FlashWindow(h, TRUE) ? 1 : 0;
+    case 15: {
+        const DWORD target_tid = ::GetWindowThreadProcessId(h, nullptr);
+        const DWORD self_tid = ::GetCurrentThreadId();
+        BOOL attached = FALSE;
+        if (target_tid && target_tid != self_tid)
+            attached = ::AttachThreadInput(self_tid, target_tid, TRUE);
+        const HWND old_focus = ::SetFocus(h);
+        if (attached) ::AttachThreadInput(self_tid, target_tid, FALSE);
+        return old_focus || ::GetFocus() == h ? 1 : 0;
+    }
+    default:
+        return 0;
+    }
+}
+
+const char *dmsoft::EnumProcess(PCSTR name) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = JoinPidsCompat(EnumProcessIdsCompat(name));
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::EnumWindow(long parent, PCSTR title, PCSTR class_name, long filter) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = JoinHwndsCompat(EnumWindowsCompat(HwndFromLong(parent), 0, title, class_name, filter));
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindWindowByProcessId(long process_id, PCSTR class_name, PCSTR title_name) {
+    auto windows = EnumWindowsCompat(nullptr, static_cast<DWORD>(process_id), title_name, class_name, 1 | 2);
+    return windows.empty() ? 0 : static_cast<long>(reinterpret_cast<INT_PTR>(windows.front()));
+}
+
+long dmsoft::FindWindowByProcess(PCSTR process_name, PCSTR class_name, PCSTR title_name) {
+    const auto pids = EnumProcessIdsCompat(process_name);
+    for (DWORD pid : pids) {
+        auto windows = EnumWindowsCompat(nullptr, pid, title_name, class_name, 1 | 2);
+        if (!windows.empty())
+            return static_cast<long>(reinterpret_cast<INT_PTR>(windows.front()));
+    }
+    return 0;
+}
+
+const char *dmsoft::EnumWindowByProcessId(long pid, PCSTR title, PCSTR class_name, long filter) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = JoinHwndsCompat(
+        EnumWindowsCompat(nullptr, static_cast<DWORD>(pid), title, class_name, filter));
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::EnumWindowByProcess(PCSTR process_name, PCSTR title, PCSTR class_name, long filter) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    std::vector<HWND> all;
+    for (DWORD pid : EnumProcessIdsCompat(process_name)) {
+        auto part = EnumWindowsCompat(nullptr, pid, title, class_name, filter);
+        all.insert(all.end(), part.begin(), part.end());
+    }
+    p->scratch = JoinHwndsCompat(all);
+    return p->scratch.c_str();
 }
 
 #include "legacy_dm_generated.inc"
