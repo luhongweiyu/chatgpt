@@ -655,6 +655,44 @@ void test_window(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     ::SetWindowLongPtr(hwnd, GWL_EXSTYLE,
         ::GetWindowLongPtr(hwnd, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_LAYERED));
 
+
+    HWND edit = ::CreateWindowExA(
+        WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+        10, 50, 250, 24, hwnd, nullptr, wc.hInstance, nullptr);
+    if (edit) {
+        const long edit_h = static_cast<long>(reinterpret_cast<INT_PTR>(edit));
+
+        ::OpenClipboard(nullptr);
+        ::EmptyClipboard();
+        const char paste_text[] = "hcbyj-parity-paste";
+        HGLOBAL clip_mem = ::GlobalAlloc(GMEM_MOVEABLE, sizeof(paste_text));
+        if (clip_mem) {
+            void *clip_ptr = ::GlobalLock(clip_mem);
+            if (clip_ptr) {
+                std::memcpy(clip_ptr, paste_text, sizeof(paste_text));
+                ::GlobalUnlock(clip_mem);
+                ::SetClipboardData(CF_TEXT, clip_mem);
+            } else {
+                ::GlobalFree(clip_mem);
+            }
+        }
+        ::CloseClipboard();
+
+        ::SetWindowTextA(edit, "");
+        const long old_paste_ret = old_dm.SendPaste(edit_h);
+        char old_paste[128]{};
+        ::GetWindowTextA(edit, old_paste, sizeof(old_paste));
+
+        ::SetWindowTextA(edit, "");
+        const long new_paste_ret = new_dm.SendPaste(edit_h);
+        char new_paste[128]{};
+        ::GetWindowTextA(edit, new_paste, sizeof(new_paste));
+
+        eq_num("SendPaste-edit-ret", old_paste_ret, new_paste_ret);
+        eq_str("SendPaste-edit-effect", old_paste, new_paste);
+        ::DestroyWindow(edit);
+    }
+
     if (child) ::DestroyWindow(child);
 
     ::DestroyWindow(hwnd);
@@ -838,6 +876,21 @@ void test_word_result_and_input(LegacyRvaClient &old_dm, dmsoft &new_dm) {
            old_dm.MoveTo(pt.x, pt.y),
            new_dm.MoveTo(pt.x, pt.y));
 }
+
+    const long old_char_down = old_dm.KeyDownChar("f24");
+    const long old_char_up = old_dm.KeyUpChar("f24");
+    const long new_char_down = new_dm.KeyDownChar("f24");
+    const long new_char_up = new_dm.KeyUpChar("f24");
+    eq_num("KeyDownChar-f24", old_char_down, new_char_down);
+    eq_num("KeyUpChar-f24", old_char_up, new_char_up);
+
+    eq_num("KeyPressChar-invalid",
+           old_dm.KeyPressChar("not-a-key"),
+           new_dm.KeyPressChar("not-a-key"));
+    eq_num("KeyPressStr-empty",
+           old_dm.KeyPressStr("", 1),
+           new_dm.KeyPressStr("", 1));
+
 
 } // namespace
 
