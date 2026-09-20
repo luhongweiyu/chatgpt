@@ -592,6 +592,35 @@ void test_pure_extended(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("CheckUAC", old_dm.CheckUAC(), new_dm.CheckUAC());
 }
 
+
+void test_basic_settings(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    eq_num("SetPath-dot", old_dm.SetPath("."), new_dm.SetPath("."));
+    {
+        const char *a = old_dm.GetPath();
+        const char *b = new_dm.GetPath();
+        eq_str("GetPath", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+    {
+        const char *a = old_dm.GetBasePath();
+        const char *b = new_dm.GetBasePath();
+        eq_str("GetBasePath", a ? std::string(a) : "<null>", b ? std::string(b) : "<null>");
+    }
+
+    eq_num("GetDmCount", old_dm.GetDmCount(), new_dm.GetDmCount());
+    eq_num("SetEnumWindowDelay", old_dm.SetEnumWindowDelay(12345), new_dm.SetEnumWindowDelay(12345));
+    eq_num("SetShowErrorMsg-0", old_dm.SetShowErrorMsg(0), new_dm.SetShowErrorMsg(0));
+    eq_num("SetShowErrorMsg-1", old_dm.SetShowErrorMsg(1), new_dm.SetShowErrorMsg(1));
+
+    const long old_id1 = old_dm.GetID();
+    const long old_id2 = old_dm.GetID();
+    const long new_id1 = new_dm.GetID();
+    const long new_id2 = new_dm.GetID();
+    eq_num("GetID-legacy-stable", old_id1, old_id2);
+    eq_num("GetID-recovered-stable", new_id1, new_id2);
+    eq_num("GetID-legacy-nonzero", old_id1 != 0 ? 1 : 0, 1);
+    eq_num("GetID-recovered-nonzero", new_id1 != 0 ? 1 : 0, 1);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -608,6 +637,7 @@ int main(int argc, char **argv) {
 
         test_pure(old_dm, new_dm);
         test_pure_extended(old_dm, new_dm);
+        test_basic_settings(old_dm, new_dm);
         test_system(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
