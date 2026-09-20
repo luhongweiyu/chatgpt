@@ -578,6 +578,86 @@ void test_memory(LegacyRvaClient &old_dm, dmsoft &new_dm) {
            new_dm.WriteString(pid, hex_addr(new_string_expr).c_str(), 0, "expr-new"));
     eq_str("WriteString-expr-value", old_string_expr, new_string_expr);
 
+
+    {
+        unsigned char binary_source[16] = {
+            0x10,0x21,0x32,0x43,0x54,0x65,0x76,0x87,
+            0x98,0xA9,0xBA,0xCB,0xDC,0xED,0xFE,0x0F
+        };
+
+        const long old_ptr = old_dm.ReadDataAddrToBin(
+            pid, reinterpret_cast<LONGLONG>(binary_source), 16);
+        std::vector<unsigned char> old_copy(16, 0);
+        if (old_ptr) {
+            const auto *p = reinterpret_cast<const unsigned char *>(
+                static_cast<ULONG_PTR>(static_cast<unsigned long>(old_ptr)));
+            std::memcpy(old_copy.data(), p, old_copy.size());
+        }
+
+        const long new_ptr = new_dm.ReadDataAddrToBin(
+            pid, reinterpret_cast<LONGLONG>(binary_source), 16);
+        std::vector<unsigned char> new_copy(16, 0);
+        if (new_ptr) {
+            const auto *p = reinterpret_cast<const unsigned char *>(
+                static_cast<ULONG_PTR>(static_cast<unsigned long>(new_ptr)));
+            std::memcpy(new_copy.data(), p, new_copy.size());
+        }
+
+        eq_num("ReadDataAddrToBin-success", old_ptr != 0 ? 1 : 0, new_ptr != 0 ? 1 : 0);
+        eq_num("ReadDataAddrToBin-bytes",
+               std::memcmp(old_copy.data(), new_copy.data(), old_copy.size()), 0);
+
+        auto addr_text = [](const void *ptr) {
+            char buf[32]{};
+            std::snprintf(buf, sizeof(buf), "%lX",
+                static_cast<unsigned long>(reinterpret_cast<ULONG_PTR>(ptr)));
+            return std::string(buf);
+        };
+
+        const std::string source_expr = addr_text(binary_source);
+        const long old_ptr2 = old_dm.ReadDataToBin(pid, source_expr.c_str(), 16);
+        std::fill(old_copy.begin(), old_copy.end(), 0);
+        if (old_ptr2) {
+            const auto *p = reinterpret_cast<const unsigned char *>(
+                static_cast<ULONG_PTR>(static_cast<unsigned long>(old_ptr2)));
+            std::memcpy(old_copy.data(), p, old_copy.size());
+        }
+
+        const long new_ptr2 = new_dm.ReadDataToBin(pid, source_expr.c_str(), 16);
+        std::fill(new_copy.begin(), new_copy.end(), 0);
+        if (new_ptr2) {
+            const auto *p = reinterpret_cast<const unsigned char *>(
+                static_cast<ULONG_PTR>(static_cast<unsigned long>(new_ptr2)));
+            std::memcpy(new_copy.data(), p, new_copy.size());
+        }
+        eq_num("ReadDataToBin-success", old_ptr2 != 0 ? 1 : 0, new_ptr2 != 0 ? 1 : 0);
+        eq_num("ReadDataToBin-bytes",
+               std::memcmp(old_copy.data(), new_copy.data(), old_copy.size()), 0);
+
+        unsigned char old_target[16]{};
+        unsigned char new_target[16]{};
+        const long source_ptr = static_cast<long>(
+            reinterpret_cast<INT_PTR>(binary_source));
+
+        eq_num("WriteDataAddrFromBin-ret",
+            old_dm.WriteDataAddrFromBin(
+                pid, reinterpret_cast<LONGLONG>(old_target), source_ptr, 16),
+            new_dm.WriteDataAddrFromBin(
+                pid, reinterpret_cast<LONGLONG>(new_target), source_ptr, 16));
+        eq_num("WriteDataAddrFromBin-bytes",
+            std::memcmp(old_target, new_target, sizeof(old_target)), 0);
+
+        std::memset(old_target, 0, sizeof(old_target));
+        std::memset(new_target, 0, sizeof(new_target));
+        const std::string old_target_expr = addr_text(old_target);
+        const std::string new_target_expr = addr_text(new_target);
+        eq_num("WriteDataFromBin-ret",
+            old_dm.WriteDataFromBin(pid, old_target_expr.c_str(), source_ptr, 16),
+            new_dm.WriteDataFromBin(pid, new_target_expr.c_str(), source_ptr, 16));
+        eq_num("WriteDataFromBin-bytes",
+            std::memcmp(old_target, new_target, sizeof(old_target)), 0);
+    }
+
     if (old_page) ::VirtualFree(old_page, 0, MEM_RELEASE);
     if (new_page) ::VirtualFree(new_page, 0, MEM_RELEASE);
 }
