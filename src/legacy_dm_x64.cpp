@@ -867,6 +867,139 @@ bool ParseDecimalFieldCompat(const std::string &s, long &value) {
     return true;
 }
 
+
+long KeyNameToVkCompat(PCSTR key_str) {
+    if (!key_str || !*key_str) return 0;
+
+    std::string key(key_str);
+    std::transform(key.begin(), key.end(), key.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    static const std::unordered_map<std::string, long> kMap = {
+        {"backspace", VK_BACK}, {"tab", VK_TAB}, {"clear", VK_CLEAR},
+        {"enter", VK_RETURN}, {"shift", VK_SHIFT}, {"ctrl", VK_CONTROL},
+        {"control", VK_CONTROL}, {"alt", VK_MENU}, {"pause", VK_PAUSE},
+        {"caps_lock", VK_CAPITAL}, {"capslock", VK_CAPITAL},
+        {"esc", VK_ESCAPE}, {"escape", VK_ESCAPE},
+        {"spacebar", VK_SPACE}, {"space", VK_SPACE},
+        {"page_up", VK_PRIOR}, {"pageup", VK_PRIOR},
+        {"page_down", VK_NEXT}, {"pagedown", VK_NEXT},
+        {"end", VK_END}, {"home", VK_HOME},
+        {"left_arrow", VK_LEFT}, {"left", VK_LEFT},
+        {"up_arrow", VK_UP}, {"up", VK_UP},
+        {"right_arrow", VK_RIGHT}, {"right", VK_RIGHT},
+        {"down_arrow", VK_DOWN}, {"down", VK_DOWN},
+        {"select", VK_SELECT}, {"print", VK_PRINT}, {"execute", VK_EXECUTE},
+        {"print_screen", VK_SNAPSHOT}, {"printscreen", VK_SNAPSHOT},
+        {"ins", VK_INSERT}, {"insert", VK_INSERT},
+        {"del", VK_DELETE}, {"delete", VK_DELETE}, {"help", VK_HELP},
+        {"num_lock", VK_NUMLOCK}, {"numlock", VK_NUMLOCK},
+        {"scroll_lock", VK_SCROLL}, {"scrolllock", VK_SCROLL},
+        {"left_shift", VK_LSHIFT}, {"right_shift", VK_RSHIFT},
+        {"left_control", VK_LCONTROL}, {"right_control", VK_RCONTROL},
+        {"left_ctrl", VK_LCONTROL}, {"right_ctrl", VK_RCONTROL},
+        {"left_menu", VK_LMENU}, {"right_menu", VK_RMENU},
+        {"left_alt", VK_LMENU}, {"right_alt", VK_RMENU},
+        {"browser_back", VK_BROWSER_BACK}, {"browser_forward", VK_BROWSER_FORWARD},
+        {"browser_refresh", VK_BROWSER_REFRESH}, {"browser_stop", VK_BROWSER_STOP},
+        {"browser_search", VK_BROWSER_SEARCH}, {"browser_favorites", VK_BROWSER_FAVORITES},
+        {"browser_start_and_home", VK_BROWSER_HOME}, {"browser_home", VK_BROWSER_HOME},
+        {"volume_mute", VK_VOLUME_MUTE}, {"volume_down", VK_VOLUME_DOWN},
+        {"volume_up", VK_VOLUME_UP}, {"next_track", VK_MEDIA_NEXT_TRACK},
+        {"previous_track", VK_MEDIA_PREV_TRACK}, {"stop_media", VK_MEDIA_STOP},
+        {"play/pause_media", VK_MEDIA_PLAY_PAUSE}, {"play_pause_media", VK_MEDIA_PLAY_PAUSE},
+        {"start_mail", VK_LAUNCH_MAIL}, {"select_media", VK_LAUNCH_MEDIA_SELECT},
+        {"start_application_1", VK_LAUNCH_APP1}, {"start_application_2", VK_LAUNCH_APP2},
+        {"attn_key", VK_ATTN}, {"crsel_key", VK_CRSEL}, {"exsel_key", VK_EXSEL},
+        {"play_key", VK_PLAY}, {"zoom_key", VK_ZOOM}, {"clear_key", VK_OEM_CLEAR},
+        {"multiply_key", VK_MULTIPLY}, {"add_key", VK_ADD},
+        {"separator_key", VK_SEPARATOR}, {"subtract_key", VK_SUBTRACT},
+        {"decimal_key", VK_DECIMAL}, {"divide_key", VK_DIVIDE},
+    };
+
+    const auto it = kMap.find(key);
+    if (it != kMap.end()) return it->second;
+
+    if (key.size() >= 2 && key[0] == 'f') {
+        char *end = nullptr;
+        const long n = std::strtol(key.c_str() + 1, &end, 10);
+        if (end && *end == '\0' && n >= 1 && n <= 24)
+            return VK_F1 + n - 1;
+    }
+
+    if (key.rfind("numpad_", 0) == 0 && key.size() == 8 &&
+        key[7] >= '0' && key[7] <= '9')
+        return VK_NUMPAD0 + (key[7] - '0');
+
+    if (key.size() == 1) {
+        const unsigned char c = static_cast<unsigned char>(key[0]);
+        if (c >= 'a' && c <= 'z') return c - 'a' + 'A';
+        if (c >= '0' && c <= '9') return c;
+
+        const SHORT mapped = ::VkKeyScanA(static_cast<char>(c));
+        if (mapped != -1) return LOBYTE(mapped);
+    }
+
+    return 0;
+}
+
+bool PressModifierStateCompat(BYTE state, bool down) {
+    // VkKeyScan high byte uses bit0=SHIFT, bit1=CTRL, bit2=ALT.
+    const long modifiers[] = {VK_SHIFT, VK_CONTROL, VK_MENU};
+    for (int i = down ? 0 : 2; down ? i < 3 : i >= 0; down ? ++i : --i) {
+        if (state & (1u << i)) {
+            if (!SendKeyboardVkCompat(modifiers[i], !down)) return false;
+        }
+    }
+    return true;
+}
+
+long KeyPressCharacterCompat(DmImpl *p, unsigned char ch) {
+    if (!p) return 0;
+    const SHORT mapped = ::VkKeyScanA(static_cast<char>(ch));
+    if (mapped == -1) return 0;
+
+    const long vk = LOBYTE(mapped);
+    const BYTE state = HIBYTE(mapped);
+    if (!PressModifierStateCompat(state, true)) return 0;
+    const long ret = SendKeyboardVkCompat(vk, false);
+    if (ret) ::Sleep(static_cast<DWORD>(std::max<long>(0, p->keypad_delay_normal)));
+    const long up = ret ? SendKeyboardVkCompat(vk, true) : 0;
+    PressModifierStateCompat(state, false);
+    return ret && up ? 1 : 0;
+}
+
+HWND ResolvePasteTargetCompat(long hwnd) {
+    if (hwnd != 0) return HwndFromLong(hwnd);
+
+    HWND foreground = ::GetForegroundWindow();
+    if (!foreground) return nullptr;
+    const DWORD tid = ::GetWindowThreadProcessId(foreground, nullptr);
+    GUITHREADINFO info{};
+    info.cbSize = sizeof(info);
+    if (tid && ::GetGUIThreadInfo(tid, &info) && info.hwndFocus)
+        return info.hwndFocus;
+    return foreground;
+}
+
+long SendPasteCompat(long hwnd) {
+    HWND target = ResolvePasteTargetCompat(hwnd);
+    if (!target || !::IsWindow(target)) return 0;
+
+    const DWORD target_tid = ::GetWindowThreadProcessId(target, nullptr);
+    const DWORD self_tid = ::GetCurrentThreadId();
+    const BOOL attached =
+        target_tid && target_tid != self_tid
+            ? ::AttachThreadInput(self_tid, target_tid, TRUE)
+            : FALSE;
+
+    const LRESULT result = ::SendMessageA(target, WM_PASTE, 0, 0);
+
+    if (attached) ::AttachThreadInput(self_tid, target_tid, FALSE);
+    (void)result;
+    return 1;
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -2478,6 +2611,46 @@ const char *dmsoft::MoveToEx(long x, long y, long w, long h) {
     }
     p->scratch = std::to_string(tx) + "," + std::to_string(ty);
     return p->scratch.c_str();
+}
+
+
+long dmsoft::KeyDownChar(PCSTR key_str) {
+    const long vk = KeyNameToVkCompat(key_str);
+    return vk ? KeyDown(vk) : 0;
+}
+
+long dmsoft::KeyUpChar(PCSTR key_str) {
+    const long vk = KeyNameToVkCompat(key_str);
+    return vk ? KeyUp(vk) : 0;
+}
+
+long dmsoft::KeyPressChar(PCSTR key_str) {
+    const long vk = KeyNameToVkCompat(key_str);
+    return vk ? KeyPress(vk) : 0;
+}
+
+long dmsoft::KeyPressStr(PCSTR key_str, long delay) {
+    auto *p = P(impl);
+    if (!p || !key_str || delay < 0) return 0;
+
+    const unsigned char *cur =
+        reinterpret_cast<const unsigned char *>(key_str);
+    if (!*cur) return 1;
+
+    while (*cur) {
+        // KeyPressStr is character-oriented. Multibyte ACP characters are
+        // not representable by VkKeyScanA and therefore fail here, matching
+        // the normal keyboard path's inability to type arbitrary CJK text.
+        if (!KeyPressCharacterCompat(p, *cur)) return 0;
+        ++cur;
+        if (*cur && delay > 0)
+            ::Sleep(static_cast<DWORD>(delay));
+    }
+    return 1;
+}
+
+long dmsoft::SendPaste(long hwnd) {
+    return SendPasteCompat(hwnd);
 }
 
 #include "legacy_dm_generated.inc"
