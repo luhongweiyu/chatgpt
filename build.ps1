@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-cmake -S . -B build -A x64 -G $Generator
+cmake -S . -B build -A x64
 cmake --build build --config $Config
 
 Write-Host ""
