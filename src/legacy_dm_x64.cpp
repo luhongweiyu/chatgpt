@@ -1278,4 +1278,161 @@ const char *dmsoft::EnumWindowByProcess(PCSTR process_name, PCSTR title, PCSTR c
     return p->scratch.c_str();
 }
 
+
+long dmsoft::OpenProcess(long pid) {
+    HANDLE process = ::OpenProcess(PROCESS_ALL_ACCESS, FALSE, static_cast<DWORD>(pid));
+    if (!process) {
+        process = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ |
+                                PROCESS_VM_WRITE | PROCESS_VM_OPERATION |
+                                PROCESS_SET_QUOTA | PROCESS_TERMINATE,
+                                FALSE, static_cast<DWORD>(pid));
+    }
+    return static_cast<long>(reinterpret_cast<INT_PTR>(process));
+}
+
+long dmsoft::TerminateProcess(long pid) {
+    HANDLE process = ::OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+    if (!process) return 0;
+    const BOOL ok = ::TerminateProcess(process, 0);
+    ::CloseHandle(process);
+    return ok ? 1 : 0;
+}
+
+long dmsoft::FreeProcessMemory(long hwnd) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    HANDLE process = OpenTarget(p, hwnd, PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION);
+    if (!process) return 0;
+    const BOOL ok = ::EmptyWorkingSet(process);
+    if (!ok) SetNativeError(p, static_cast<long>(::GetLastError()));
+    else SetNativeError(p, 0);
+    ::CloseHandle(process);
+    return ok ? 1 : 0;
+}
+
+long dmsoft::VirtualProtectEx(long hwnd, LONGLONG addr, long size, long type, long old_protect) {
+    auto *p = P(impl);
+    if (!p || size <= 0) return 0;
+
+    DWORD new_protect = 0;
+    if (type == 0) new_protect = PAGE_EXECUTE_READWRITE;
+    else if (type == 1) new_protect = static_cast<DWORD>(old_protect);
+    else {
+        SetNativeError(p, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    HANDLE process = OpenTarget(
+        p, hwnd, PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION);
+    if (!process) return 0;
+
+    DWORD previous = 0;
+    const BOOL ok = ::VirtualProtectEx(
+        process,
+        reinterpret_cast<LPVOID>(static_cast<ULONG_PTR>(addr)),
+        static_cast<SIZE_T>(size),
+        new_protect,
+        &previous);
+    if (!ok) {
+        SetNativeError(p, static_cast<long>(::GetLastError()));
+        previous = 0;
+    } else {
+        SetNativeError(p, 0);
+    }
+    ::CloseHandle(process);
+    return static_cast<long>(previous);
+}
+
+const char *dmsoft::VirtualQueryEx(long hwnd, LONGLONG addr, long pmbi) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    HANDLE process = OpenTarget(p, hwnd, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ);
+    if (!process) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    MEMORY_BASIC_INFORMATION mbi{};
+    const SIZE_T got = ::VirtualQueryEx(
+        process,
+        reinterpret_cast<LPCVOID>(static_cast<ULONG_PTR>(addr)),
+        &mbi,
+        sizeof(mbi));
+    if (!got) {
+        SetNativeError(p, static_cast<long>(::GetLastError()));
+        ::CloseHandle(process);
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    DWORD pid = ResolvePid(p, hwnd);
+    const bool target64 = pid && ProcessIs64BitCompat(pid);
+
+    struct MBI32Compat {
+        DWORD BaseAddress;
+        DWORD AllocationBase;
+        DWORD AllocationProtect;
+        DWORD RegionSize;
+        DWORD State;
+        DWORD Protect;
+        DWORD Type;
+    };
+    struct alignas(16) MBI64Compat {
+        ULONGLONG BaseAddress;
+        ULONGLONG AllocationBase;
+        DWORD AllocationProtect;
+        DWORD alignment1;
+        ULONGLONG RegionSize;
+        DWORD State;
+        DWORD Protect;
+        DWORD Type;
+        DWORD alignment2;
+    };
+
+    if (pmbi != 0) {
+        SIZE_T written = 0;
+        if (target64) {
+            MBI64Compat out{};
+            out.BaseAddress = static_cast<ULONGLONG>(reinterpret_cast<ULONG_PTR>(mbi.BaseAddress));
+            out.AllocationBase = static_cast<ULONGLONG>(reinterpret_cast<ULONG_PTR>(mbi.AllocationBase));
+            out.AllocationProtect = mbi.AllocationProtect;
+            out.RegionSize = static_cast<ULONGLONG>(mbi.RegionSize);
+            out.State = mbi.State;
+            out.Protect = mbi.Protect;
+            out.Type = mbi.Type;
+            ::WriteProcessMemory(
+                ::GetCurrentProcess(),
+                reinterpret_cast<LPVOID>(static_cast<ULONG_PTR>(static_cast<unsigned long>(pmbi))),
+                &out, sizeof(out), &written);
+        } else {
+            MBI32Compat out{};
+            out.BaseAddress = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(mbi.BaseAddress));
+            out.AllocationBase = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(mbi.AllocationBase));
+            out.AllocationProtect = mbi.AllocationProtect;
+            out.RegionSize = static_cast<DWORD>(mbi.RegionSize);
+            out.State = mbi.State;
+            out.Protect = mbi.Protect;
+            out.Type = mbi.Type;
+            ::WriteProcessMemory(
+                ::GetCurrentProcess(),
+                reinterpret_cast<LPVOID>(static_cast<ULONG_PTR>(static_cast<unsigned long>(pmbi))),
+                &out, sizeof(out), &written);
+        }
+    }
+
+    std::ostringstream oss;
+    oss << static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(mbi.BaseAddress)) << ','
+        << static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(mbi.AllocationBase)) << ','
+        << static_cast<unsigned long>(mbi.AllocationProtect) << ','
+        << static_cast<unsigned long long>(mbi.RegionSize) << ','
+        << static_cast<unsigned long>(mbi.State) << ','
+        << static_cast<unsigned long>(mbi.Protect) << ','
+        << static_cast<unsigned long>(mbi.Type);
+    p->scratch = oss.str();
+    SetNativeError(p, 0);
+    ::CloseHandle(process);
+    return p->scratch.c_str();
+}
+
 #include "legacy_dm_generated.inc"
