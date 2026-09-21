@@ -71,6 +71,9 @@ struct LegacyDictEntryCompat {
     long right = 0;
     long declared_count = 0;
     long height = 0;
+    long width = 0;
+    long bit_count = 0;
+    std::vector<unsigned char> bits;
 };
 
 bool ParseLegacyDictEntryCompat(PCSTR text, LegacyDictEntryCompat &out) {
@@ -117,7 +120,38 @@ bool ParseLegacyDictEntryCompat(PCSTR text, LegacyDictEntryCompat &out) {
     out.right = right;
     out.declared_count = count;
     out.height = height;
-    return true;
+
+    const size_t total_bits = out.bitmap.size() * 4u;
+    const size_t h = static_cast<size_t>(height);
+    const size_t w =
+        (total_bits % h) != 0u
+            ? (total_bits - 1u) / h
+            : total_bits / h;
+    if (w == 0 || w > 255u)
+        return false;
+
+    out.width = static_cast<long>(w);
+    out.bits.assign(w * h, 0);
+    size_t bit_index = 0;
+    for (char ch : out.bitmap) {
+        int value = 0;
+        if (ch >= '0' && ch <= '9') value = ch - '0';
+        else if (ch >= 'A' && ch <= 'F') value = ch - 'A' + 10;
+        else if (ch >= 'a' && ch <= 'f') value = ch - 'a' + 10;
+        else return false;
+
+        for (int bit = 3; bit >= 0; --bit) {
+            if (bit_index >= out.bits.size())
+                break;
+            const unsigned char set =
+                static_cast<unsigned char>((value >> bit) & 1);
+            out.bits[bit_index++] = set;
+            out.bit_count += set ? 1 : 0;
+        }
+        if (bit_index >= out.bits.size())
+            break;
+    }
+    return out.bit_count > 0;
 }
 
 std::string LegacyDictKeyCompat(const LegacyDictEntryCompat &entry) {
@@ -3110,6 +3144,458 @@ bool MatchColorSpecCompat(
         }
     }
     return spec.inverse ? !matched : matched;
+}
+
+
+struct OcrResultCompat {
+    long x = 0;
+    long y = 0;
+    long width = 0;
+    long height = 0;
+    std::string text;
+    double confidence = 0.0;
+};
+
+struct OcrBinaryCompat {
+    long width = 0;
+    long height = 0;
+    std::vector<unsigned char> pixels;
+    std::vector<int> prefix;
+
+    unsigned char At(long x, long y) const {
+        if (x < 0 || y < 0 || x >= width || y >= height)
+            return 0;
+        return pixels[
+            static_cast<size_t>(y) * static_cast<size_t>(width) +
+            static_cast<size_t>(x)];
+    }
+
+    int Sum(long x1, long y1, long x2, long y2) const {
+        x1 = (std::max)(0L, (std::min)(x1, width));
+        x2 = (std::max)(0L, (std::min)(x2, width));
+        y1 = (std::max)(0L, (std::min)(y1, height));
+        y2 = (std::max)(0L, (std::min)(y2, height));
+        if (x2 <= x1 || y2 <= y1) return 0;
+        const size_t stride = static_cast<size_t>(width + 1);
+        const auto p = [&](long x, long y) -> int {
+            return prefix[
+                static_cast<size_t>(y) * stride +
+                static_cast<size_t>(x)];
+        };
+        return p(x2,y2) - p(x1,y2) - p(x2,y1) + p(x1,y1);
+    }
+};
+
+bool BuildOcrBinaryCompat(
+    const ScreenImageCompat &image,
+    PCSTR color, double sim,
+    OcrBinaryCompat &out) {
+    out = {};
+    ColorSpecCompat spec{};
+    if (!ParseColorSpecCompat(color, spec) ||
+        image.width <= 0 || image.height <= 0 ||
+        image.pixels.empty())
+        return false;
+
+    out.width = image.width;
+    out.height = image.height;
+    out.pixels.resize(
+        static_cast<size_t>(out.width) *
+        static_cast<size_t>(out.height));
+
+    for (long y = 0; y < out.height; ++y) {
+        for (long x = 0; x < out.width; ++x) {
+            const auto &pixel =
+                image.pixels[
+                    static_cast<size_t>(y) *
+                        static_cast<size_t>(out.width) +
+                    static_cast<size_t>(x)];
+            out.pixels[
+                static_cast<size_t>(y) *
+                    static_cast<size_t>(out.width) +
+                static_cast<size_t>(x)] =
+                MatchColorSpecCompat(pixel, spec, sim) ? 1 : 0;
+        }
+    }
+
+    const size_t stride =
+        static_cast<size_t>(out.width + 1);
+    out.prefix.assign(
+        stride * static_cast<size_t>(out.height + 1), 0);
+    for (long y = 1; y <= out.height; ++y) {
+        int row_sum = 0;
+        for (long x = 1; x <= out.width; ++x) {
+            row_sum += out.At(x - 1, y - 1);
+            out.prefix[
+                static_cast<size_t>(y) * stride +
+                static_cast<size_t>(x)] =
+                out.prefix[
+                    static_cast<size_t>(y - 1) * stride +
+                    static_cast<size_t>(x)] +
+                row_sum;
+        }
+    }
+    return true;
+}
+
+int MatchOcrWordCompat(
+    const OcrBinaryCompat &binary,
+    long x, long y,
+    const LegacyDictEntryCompat &word,
+    int max_error) {
+    if (word.width <= 0 || word.height <= 0 ||
+        word.bits.size() !=
+            static_cast<size_t>(word.width) *
+            static_cast<size_t>(word.height) ||
+        x < 0 || y < 0 ||
+        x + word.width > binary.width ||
+        y + word.height > binary.height)
+        return max_error + 1;
+
+    int errors = 0;
+    size_t idx = 0;
+    for (long dx = 0; dx < word.width; ++dx) {
+        for (long dy = 0; dy < word.height; ++dy, ++idx) {
+            if (binary.At(x + dx, y + dy) != word.bits[idx]) {
+                if (++errors > max_error)
+                    return errors;
+            }
+        }
+    }
+    return errors;
+}
+
+void RecognizeOcrCompat(
+    const OcrBinaryCompat &binary,
+    const std::vector<LegacyDictEntryCompat> &dict,
+    double sim,
+    std::vector<OcrResultCompat> &results) {
+    results.clear();
+    if (binary.width <= 0 || binary.height <= 0 ||
+        dict.empty())
+        return;
+
+    long min_w = 255, min_h = 255;
+    long max_w = 0, max_h = 0;
+    long min_bits = 255 * 255;
+    long max_bits = 0;
+    for (const auto &word : dict) {
+        if (word.width <= 0 || word.height <= 0 ||
+            word.bits.empty())
+            continue;
+        min_w = (std::min)(min_w, word.width);
+        min_h = (std::min)(min_h, word.height);
+        max_w = (std::max)(max_w, word.width);
+        max_h = (std::max)(max_h, word.height);
+        min_bits = (std::min)(min_bits, word.bit_count);
+        max_bits = (std::max)(max_bits, word.bit_count);
+    }
+    if (min_w <= 0 || min_h <= 0 ||
+        max_w <= 0 || max_h <= 0)
+        return;
+
+    std::vector<unsigned char> occupied(
+        static_cast<size_t>(binary.width) *
+        static_cast<size_t>(binary.height), 0);
+
+    double effective_sim = sim;
+    if (effective_sim < 0.0 || effective_sim > 1.0)
+        effective_sim = 1.0;
+    const bool exact = effective_sim > 1.0 - 1e-5;
+    if (!exact)
+        effective_sim = 0.5 + effective_sim / 2.0;
+
+    for (long y = 0;
+         y <= binary.height - min_h;
+         ++y) {
+        for (long x = 0;
+             x <= binary.width - min_w;
+             ++x) {
+            if (occupied[
+                    static_cast<size_t>(y) *
+                        static_cast<size_t>(binary.width) +
+                    static_cast<size_t>(x)])
+                continue;
+
+            const int max_region_sum =
+                binary.Sum(
+                    x, y,
+                    (std::min)(x + max_w, binary.width),
+                    (std::min)(y + max_h, binary.height));
+            if (exact) {
+                if (max_region_sum < min_bits)
+                    continue;
+                if (binary.Sum(
+                        x, y, x + min_w, y + min_h) >
+                    max_bits)
+                    continue;
+            } else {
+                if (max_region_sum <
+                    static_cast<int>(
+                        min_bits * effective_sim))
+                    continue;
+                if (binary.Sum(
+                        x, y, x + min_w, y + min_h) >
+                    static_cast<int>(
+                        max_bits * (2.0 - effective_sim)))
+                    continue;
+            }
+
+            for (const auto &word : dict) {
+                if (word.width <= 0 || word.height <= 0 ||
+                    word.bits.empty() ||
+                    x + word.width > binary.width ||
+                    y + word.height > binary.height)
+                    continue;
+
+                const int area =
+                    static_cast<int>(
+                        word.width * word.height);
+                const int src_bits =
+                    binary.Sum(
+                        x, y,
+                        x + word.width,
+                        y + word.height);
+                const int max_error = exact
+                    ? 0
+                    : static_cast<int>(
+                        (1.0 - effective_sim) * area);
+
+                if (std::abs(src_bits - word.bit_count) >
+                    max_error)
+                    continue;
+
+                const int errors =
+                    MatchOcrWordCompat(
+                        binary, x, y,
+                        word, max_error);
+                if (errors > max_error)
+                    continue;
+
+                int right_sum = 0;
+                if (x + word.width < binary.width) {
+                    for (long dy = 0;
+                         dy < word.height; ++dy)
+                        right_sum += binary.At(
+                            x + word.width, y + dy);
+                }
+                const int right_limit =
+                    exact
+                        ? static_cast<int>(
+                              word.height / 2)
+                        : static_cast<int>(
+                              word.height / 2);
+                if ((exact && right_sum >= right_limit) ||
+                    (!exact && right_sum > right_limit))
+                    continue;
+
+                OcrResultCompat item{};
+                item.x = x;
+                item.y = y;
+                item.width = word.width;
+                item.height = word.height;
+                item.text = word.word;
+                item.confidence =
+                    area > 0
+                        ? static_cast<double>(
+                              area - errors) /
+                              static_cast<double>(area)
+                        : 0.0;
+                results.push_back(std::move(item));
+
+                for (long fy = y;
+                     fy < y + word.height; ++fy) {
+                    for (long fx = x;
+                         fx < x + word.width; ++fx) {
+                        occupied[
+                            static_cast<size_t>(fy) *
+                                static_cast<size_t>(binary.width) +
+                            static_cast<size_t>(fx)] = 1;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    std::stable_sort(
+        results.begin(), results.end(),
+        [](const OcrResultCompat &a,
+           const OcrResultCompat &b) {
+            if (std::abs(a.y - b.y) < 9)
+                return a.x < b.x;
+            return a.y < b.y;
+        });
+}
+
+bool RecognizeOcrRegionCompat(
+    DmImpl *p,
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim,
+    std::vector<OcrResultCompat> &results) {
+    results.clear();
+    if (!p || x2 < x1 || y2 < y1 ||
+        !color || !*color)
+        return false;
+
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionForObjectCompat(
+            p, x1, y1, x2, y2, image))
+        return false;
+
+    OcrBinaryCompat binary;
+    if (!BuildOcrBinaryCompat(
+            image, color, sim, binary))
+        return false;
+
+    std::vector<LegacyDictEntryCompat> dict;
+    long index = 0;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        index = p->current_dict;
+        if (index < 0 || index >= 100)
+            return false;
+        dict = p->dictionaries[
+            static_cast<size_t>(index)];
+    }
+    if (dict.empty())
+        return false;
+
+    RecognizeOcrCompat(binary, dict, sim, results);
+    for (auto &item : results) {
+        item.x += x1;
+        item.y += y1;
+    }
+    return true;
+}
+
+std::string OcrTextCompat(
+    const std::vector<OcrResultCompat> &results) {
+    std::string out;
+    for (const auto &item : results)
+        out += item.text;
+    return out;
+}
+
+std::string OcrExTextCompat(
+    const std::vector<OcrResultCompat> &results) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < results.size(); ++i) {
+        if (i) oss << '|';
+        oss << results[i].x << ','
+            << results[i].y << ','
+            << results[i].text;
+    }
+    return oss.str();
+}
+
+struct OcrSpanCompat {
+    size_t begin = 0;
+    size_t end = 0;
+    long x = 0;
+    long y = 0;
+};
+
+std::string BuildOcrSpansCompat(
+    const std::vector<OcrResultCompat> &results,
+    std::vector<OcrSpanCompat> &spans) {
+    spans.clear();
+    std::string text;
+    for (const auto &item : results) {
+        OcrSpanCompat span{};
+        span.begin = text.size();
+        span.x = item.x;
+        span.y = item.y;
+        text += item.text;
+        span.end = text.size();
+        spans.push_back(span);
+    }
+    return text;
+}
+
+const OcrSpanCompat *FindOcrSpanCompat(
+    const std::vector<OcrSpanCompat> &spans,
+    size_t index) {
+    for (const auto &span : spans) {
+        if (index >= span.begin &&
+            index < span.end)
+            return &span;
+    }
+    return nullptr;
+}
+
+std::vector<std::string> SplitNonEmptyCompat(
+    PCSTR text, char delim) {
+    std::vector<std::string> out;
+    if (!text) return out;
+    for (const auto &part :
+         SplitCompat(text, delim)) {
+        if (!part.empty())
+            out.push_back(part);
+    }
+    return out;
+}
+
+long FindStrFromOcrCompat(
+    const std::vector<OcrResultCompat> &results,
+    PCSTR targets, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    const auto wanted =
+        SplitNonEmptyCompat(targets, '|');
+    if (wanted.empty()) return -1;
+
+    std::vector<OcrSpanCompat> spans;
+    const std::string text =
+        BuildOcrSpansCompat(results, spans);
+
+    for (size_t i = 0; i < wanted.size(); ++i) {
+        const size_t pos = text.find(wanted[i]);
+        if (pos == std::string::npos)
+            continue;
+        const auto *span =
+            FindOcrSpanCompat(spans, pos);
+        if (!span) continue;
+        if (x) *x = span->x;
+        if (y) *y = span->y;
+        return static_cast<long>(i);
+    }
+    return -1;
+}
+
+std::string FindStrExFromOcrCompat(
+    const std::vector<OcrResultCompat> &results,
+    PCSTR targets) {
+    const auto wanted =
+        SplitNonEmptyCompat(targets, '|');
+    if (wanted.empty()) return {};
+
+    std::vector<OcrSpanCompat> spans;
+    const std::string text =
+        BuildOcrSpansCompat(results, spans);
+    std::ostringstream oss;
+    bool first = true;
+
+    for (size_t i = 0; i < wanted.size(); ++i) {
+        size_t from = 0;
+        while (from <= text.size()) {
+            const size_t pos =
+                text.find(wanted[i], from);
+            if (pos == std::string::npos)
+                break;
+            const auto *span =
+                FindOcrSpanCompat(spans, pos);
+            if (span) {
+                if (!first) oss << '|';
+                first = false;
+                oss << i << ','
+                    << span->x << ','
+                    << span->y;
+            }
+            from = pos + 1;
+        }
+    }
+    return oss.str();
 }
 
 std::string RgbHexCompat(const RgbColorCompat &c) {
@@ -9006,6 +9492,77 @@ LONGLONG dmsoft::GetRemoteApiAddress(
         p,
         result ? 0 : ERROR_PROC_NOT_FOUND);
     return result;
+}
+
+
+const char *dmsoft::Ocr(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p) return "";
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch = OcrTextCompat(results);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::OcrEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p) return "";
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch = OcrExTextCompat(results);
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindStr(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim,
+    long *x, long *y) {
+    auto *p = P(impl);
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!p || !str || !*str)
+        return -1;
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results))
+        return -1;
+    return FindStrFromOcrCompat(
+        results, str, x, y);
+}
+
+const char *dmsoft::FindStrEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p || !str || !*str)
+        return "";
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch =
+        FindStrExFromOcrCompat(results, str);
+    return p->scratch.c_str();
 }
 
 #include "legacy_dm_generated.inc"
