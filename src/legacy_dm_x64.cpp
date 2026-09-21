@@ -3994,6 +3994,70 @@ std::string FindStrExFromOcrCompat(
 }
 
 
+
+std::string FindStrExSFromOcrCompat(
+    const std::vector<OcrResultCompat> &results,
+    PCSTR targets) {
+    const auto wanted =
+        SplitNonEmptyCompat(targets, '|');
+    if (wanted.empty()) return {};
+
+    std::vector<OcrSpanCompat> spans;
+    const std::string text =
+        BuildOcrSpansCompat(results, spans);
+    std::ostringstream oss;
+    bool first = true;
+
+    for (const auto &target : wanted) {
+        size_t from = 0;
+        while (from <= text.size()) {
+            const size_t pos =
+                text.find(target, from);
+            if (pos == std::string::npos)
+                break;
+            const auto *span =
+                FindOcrSpanCompat(spans, pos);
+            if (span) {
+                if (!first) oss << '|';
+                first = false;
+                oss << target << ','
+                    << span->x << ','
+                    << span->y;
+            }
+            from = pos + 1;
+        }
+    }
+    return oss.str();
+}
+
+std::string FindStrSFromOcrCompat(
+    const std::vector<OcrResultCompat> &results,
+    PCSTR targets,
+    long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    const auto wanted =
+        SplitNonEmptyCompat(targets, '|');
+    if (wanted.empty()) return {};
+
+    std::vector<OcrSpanCompat> spans;
+    const std::string text =
+        BuildOcrSpansCompat(results, spans);
+
+    for (const auto &target : wanted) {
+        const size_t pos = text.find(target);
+        if (pos == std::string::npos)
+            continue;
+        const auto *span =
+            FindOcrSpanCompat(spans, pos);
+        if (!span) continue;
+        if (x) *x = span->x;
+        if (y) *y = span->y;
+        return target;
+    }
+    return {};
+}
+
 struct OcrWordGroupCompat {
     long x = 0;
     long y = 0;
@@ -10238,6 +10302,69 @@ const char *dmsoft::GetWordsNoDict(
             x1, y1,
             word_gap, line_height);
     return p->scratch.c_str();
+}
+
+
+const char *dmsoft::FindStrS(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim,
+    long *x, long *y) {
+    auto *p = P(impl);
+    if (x) *x = -1;
+    if (y) *y = -1;
+    if (!p || !str || !*str)
+        return "";
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    p->scratch =
+        FindStrSFromOcrCompat(
+            results, str, x, y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindStrFastS(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim,
+    long *x, long *y) {
+    // The native core is already the fast binary-scan path.
+    return FindStrS(
+        x1, y1, x2, y2,
+        str, color, sim, x, y);
+}
+
+const char *dmsoft::FindStrExS(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p || !str || !*str)
+        return "";
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch =
+        FindStrExSFromOcrCompat(
+            results, str);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindStrFastExS(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim) {
+    return FindStrExS(
+        x1, y1, x2, y2,
+        str, color, sim);
 }
 
 #include "legacy_dm_generated.inc"
