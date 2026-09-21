@@ -2976,6 +2976,61 @@ void test_ocr_core(
         eq_str(
             "FindStrEx-controlled",
             old_find_ex, new_find_ex);
+
+
+        long ofx = 777, ofy = 888;
+        long nfx = 777, nfy = 888;
+        const long old_fast =
+            old_dm.FindStrFast(
+                0, 0, 79, 39,
+                "AA|A",
+                "000000-000000", 1.0,
+                &ofx, &ofy);
+        const long new_fast =
+            new_dm.FindStrFast(
+                0, 0, 79, 39,
+                "AA|A",
+                "000000-000000", 1.0,
+                &nfx, &nfy);
+        eq_num("FindStrFast-controlled-ret", old_fast, new_fast);
+        eq_num("FindStrFast-controlled-x", ofx, nfx);
+        eq_num("FindStrFast-controlled-y", ofy, nfy);
+
+        {
+            const char *a = old_dm.FindStrFastEx(
+                0, 0, 79, 39, "A|AA",
+                "000000-000000", 1.0);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.FindStrFastEx(
+                0, 0, 79, 39, "A|AA",
+                "000000-000000", 1.0);
+            const std::string nb = b ? b : "<null>";
+            eq_str("FindStrFastEx-controlled", oa, nb);
+        }
+
+        {
+            const char *a = old_dm.FindStrE(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.FindStrE(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0);
+            const std::string nb = b ? b : "<null>";
+            eq_str("FindStrE-controlled", oa, nb);
+        }
+
+        {
+            const char *a = old_dm.FindStrFastE(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.FindStrFastE(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0);
+            const std::string nb = b ? b : "<null>";
+            eq_str("FindStrFastE-controlled", oa, nb);
+        }
     }
 
     old_dm.UnBindWindow();
