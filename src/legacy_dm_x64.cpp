@@ -57,6 +57,9 @@ struct ExcludeRegionCompat {
 };
 
 
+bool ParseLongCompat(const std::string &s, long &out);
+std::vector<std::string> SplitCompat(const std::string &s, char delim);
+
 struct LegacyDictEntryCompat {
     std::string raw;
     std::string bitmap;
