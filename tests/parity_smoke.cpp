@@ -41,6 +41,33 @@ void eq_str(const char *name, const std::string &oldv, const std::string &newv) 
     else fail(name, oldv, newv);
 }
 
+
+bool parse_beijing_time(
+    const std::string &text, __time64_t &out) {
+    int y=0,m=0,d=0,hh=0,mm=0,ss=0;
+    char tail = '\0';
+    if (std::sscanf(
+            text.c_str(),
+            "%d-%d-%d %d:%d:%d%c",
+            &y,&m,&d,&hh,&mm,&ss,&tail) != 6)
+        return false;
+    if (y < 1970 || m < 1 || m > 12 ||
+        d < 1 || d > 31 ||
+        hh < 0 || hh > 23 ||
+        mm < 0 || mm > 59 ||
+        ss < 0 || ss > 60)
+        return false;
+    std::tm tm{};
+    tm.tm_year = y - 1900;
+    tm.tm_mon = m - 1;
+    tm.tm_mday = d;
+    tm.tm_hour = hh;
+    tm.tm_min = mm;
+    tm.tm_sec = ss;
+    out = _mkgmtime64(&tm);
+    return out >= 0;
+}
+
 std::filesystem::path make_root() {
     char temp[MAX_PATH]{};
     ::GetTempPathA(MAX_PATH, temp);
@@ -2499,6 +2526,92 @@ void test_mac_address(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_str("GetMac", old_mac, new_mac);
 }
 
+
+void test_network_time(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    {
+        const char *a = old_dm.GetNetTimeByIp("127.0.0.1");
+        const std::string old_fail = a ? a : "<null>";
+        const char *b = new_dm.GetNetTimeByIp("127.0.0.1");
+        const std::string new_fail = b ? b : "<null>";
+        eq_str("GetNetTimeByIp-failure", old_fail, new_fail);
+    }
+
+    {
+        const char *a = old_dm.GetNetTimeSafe();
+        const std::string old_safe = a ? a : "<null>";
+        const char *b = new_dm.GetNetTimeSafe();
+        const std::string new_safe = b ? b : "<null>";
+        eq_str("GetNetTimeSafe", old_safe, new_safe);
+    }
+
+    const char *a = old_dm.GetNetTimeByIp(
+        "ntp.aliyun.com|ntp.tencent.com|time.windows.com");
+    const std::string old_time = a ? a : "<null>";
+    const char *b = new_dm.GetNetTimeByIp(
+        "ntp.aliyun.com|ntp.tencent.com|time.windows.com");
+    const std::string new_time = b ? b : "<null>";
+
+    const std::string failure = "0000-00-00 00:00:00";
+    if (old_time == failure || new_time == failure) {
+        eq_str("GetNetTimeByIp-online-failure-shape",
+               old_time, new_time);
+    } else {
+        __time64_t old_epoch = 0, new_epoch = 0;
+        const bool old_ok =
+            parse_beijing_time(old_time, old_epoch);
+        const bool new_ok =
+            parse_beijing_time(new_time, new_epoch);
+        eq_num(
+            "GetNetTimeByIp-online-format",
+            old_ok ? 1 : 0,
+            new_ok ? 1 : 0);
+        if (old_ok && new_ok) {
+            const __time64_t delta =
+                old_epoch > new_epoch
+                    ? old_epoch - new_epoch
+                    : new_epoch - old_epoch;
+            eq_num(
+                "GetNetTimeByIp-online-delta<=10s",
+                delta <= 10 ? 1 : 0,
+                1);
+        }
+    }
+
+    {
+        const char *oa = old_dm.GetNetTime();
+        const std::string old_default = oa ? oa : "<null>";
+        const char *nb = new_dm.GetNetTime();
+        const std::string new_default = nb ? nb : "<null>";
+
+        if (old_default == failure || new_default == failure) {
+            eq_num(
+                "GetNetTime-valid-or-failure",
+                old_default == failure ? 0 : 1,
+                new_default == failure ? 0 : 1);
+        } else {
+            __time64_t old_epoch = 0, new_epoch = 0;
+            const bool old_ok =
+                parse_beijing_time(old_default, old_epoch);
+            const bool new_ok =
+                parse_beijing_time(new_default, new_epoch);
+            eq_num(
+                "GetNetTime-format",
+                old_ok ? 1 : 0,
+                new_ok ? 1 : 0);
+            if (old_ok && new_ok) {
+                const __time64_t delta =
+                    old_epoch > new_epoch
+                        ? old_epoch - new_epoch
+                        : new_epoch - old_epoch;
+                eq_num(
+                    "GetNetTime-delta<=10s",
+                    delta <= 10 ? 1 : 0,
+                    1);
+            }
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2535,6 +2648,7 @@ int main(int argc, char **argv) {
         test_audio_aero(old_dm, new_dm);
         test_system_identity(old_dm, new_dm);
         test_mac_address(old_dm, new_dm);
+        test_network_time(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
         test_memory(old_dm, new_dm);
