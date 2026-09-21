@@ -10391,4 +10391,61 @@ const char *dmsoft::OcrExOne(
     return p->scratch.c_str();
 }
 
+
+const char *dmsoft::OcrInFile(
+    long x1, long y1, long x2, long y2,
+    PCSTR pic_name, PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p || !pic_name || !*pic_name ||
+        !color || !*color ||
+        x2 < x1 || y2 < y1)
+        return "";
+
+    const std::filesystem::path path =
+        ResolveObjectFilePathCompat(p, pic_name);
+    const auto image =
+        LoadPicCachedCompat(p, path);
+    if (!image) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    ScreenImageCompat cropped;
+    if (!CropScreenImageCompat(
+            *image, x1, y1, x2, y2, cropped)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    OcrBinaryCompat binary;
+    if (!BuildOcrBinaryCompat(
+            cropped, color, sim, binary)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::vector<LegacyDictEntryCompat> dict;
+    {
+        std::lock_guard<std::mutex> lock(
+            p->state_mutex);
+        const long index = p->current_dict;
+        if (index < 0 || index >= 100) {
+            p->scratch.clear();
+            return p->scratch.c_str();
+        }
+        dict = p->dictionaries[
+            static_cast<size_t>(index)];
+    }
+    if (dict.empty()) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::vector<OcrResultCompat> results;
+    RecognizeOcrCompat(
+        binary, dict, sim, results);
+    p->scratch = OcrTextCompat(results);
+    return p->scratch.c_str();
+}
+
 #include "legacy_dm_generated.inc"
