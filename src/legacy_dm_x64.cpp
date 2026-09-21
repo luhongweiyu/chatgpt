@@ -974,7 +974,7 @@ long WindowsMouseSpeedFromLevelCompat(long level) {
 
 
 
-LONGLONG ModuleBaseForPidCompat(DWORD pid, PCSTR module_name);
+LONGLONG ModuleBaseForPidCompat(DWORD pid, const std::string &module_name);
 
 bool ReadProcessExactCompat(
     HANDLE process, ULONGLONG address,
@@ -1213,7 +1213,7 @@ LONGLONG ResolveRemoteExportCompat(
 
         const LONGLONG forwarded_base =
             ModuleBaseForPidCompat(
-                pid, module.c_str());
+                pid, module);
         if (!forwarded_base)
             return 0;
 
