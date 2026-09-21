@@ -10,6 +10,7 @@
 #include <psapi.h>
 #include <wincrypt.h>
 #include <shellapi.h>
+#include <iphlpapi.h>
 #include <wininet.h>
 #include <commdlg.h>
 #include <shobjidl.h>
@@ -8235,6 +8236,57 @@ long dmsoft::GetDictCount(long index) {
     std::lock_guard<std::mutex> lock(p->state_mutex);
     return static_cast<long>(
         p->dictionaries[static_cast<size_t>(index)].size());
+}
+
+
+const char *dmsoft::GetMac() {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    ULONG size = 0;
+    DWORD rc = ::GetAdaptersInfo(nullptr, &size);
+    if (rc != ERROR_BUFFER_OVERFLOW || size == 0) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::vector<unsigned char> buffer(size);
+    auto *info = reinterpret_cast<PIP_ADAPTER_INFO>(buffer.data());
+    rc = ::GetAdaptersInfo(info, &size);
+    if (rc != ERROR_SUCCESS) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    const IP_ADAPTER_INFO *chosen = nullptr;
+    for (auto *it = info; it; it = it->Next) {
+        if (it->AddressLength != 6) continue;
+        bool nonzero = false;
+        for (UINT i = 0; i < it->AddressLength; ++i)
+            nonzero = nonzero || it->Address[i] != 0;
+        if (!nonzero) continue;
+
+        if (!chosen) chosen = it;
+        if (it->Type == MIB_IF_TYPE_ETHERNET) {
+            chosen = it;
+            break;
+        }
+    }
+
+    if (!chosen) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    char mac[32]{};
+    std::snprintf(
+        mac, sizeof(mac),
+        "%02X-%02X-%02X-%02X-%02X-%02X",
+        chosen->Address[0], chosen->Address[1],
+        chosen->Address[2], chosen->Address[3],
+        chosen->Address[4], chosen->Address[5]);
+    p->scratch = mac;
+    return p->scratch.c_str();
 }
 
 #include "legacy_dm_generated.inc"
