@@ -940,6 +940,8 @@ long WindowsMouseSpeedFromLevelCompat(long level) {
 
 
 
+LONGLONG ModuleBaseForPidCompat(DWORD pid, PCSTR module_name);
+
 bool ReadProcessExactCompat(
     HANDLE process, ULONGLONG address,
     void *out, SIZE_T size) {
@@ -1010,7 +1012,7 @@ bool GetRemoteExportDirectoryCompat(
         const SIZE_T to_read =
             (std::min)(
                 static_cast<SIZE_T>(file.SizeOfOptionalHeader),
-                sizeof(oh));
+                static_cast<SIZE_T>(sizeof(oh)));
         if (to_read <
                 offsetof(
                     IMAGE_OPTIONAL_HEADER32,
