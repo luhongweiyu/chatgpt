@@ -192,6 +192,52 @@ bool write_silent_wav(const std::filesystem::path &path) {
     return out.good();
 }
 
+
+std::string current_layout_text_for_thread(DWORD tid) {
+    const HKL hkl = ::GetKeyboardLayout(tid);
+    if (!hkl) return {};
+
+    char klid[16]{};
+    std::snprintf(
+        klid, sizeof(klid), "%08lX",
+        static_cast<unsigned long>(
+            reinterpret_cast<ULONG_PTR>(hkl) & 0xffffffffULL));
+
+    HKEY key = nullptr;
+    std::string path =
+        "SYSTEM\\CurrentControlSet\\Control\\Keyboard Layouts\\";
+    path += klid;
+
+    if (::RegOpenKeyExA(
+            HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &key)
+        != ERROR_SUCCESS) {
+        std::snprintf(
+            klid, sizeof(klid), "0000%04X",
+            static_cast<unsigned>(
+                LOWORD(reinterpret_cast<ULONG_PTR>(hkl))));
+        path =
+            "SYSTEM\\CurrentControlSet\\Control\\Keyboard Layouts\\";
+        path += klid;
+        if (::RegOpenKeyExA(
+                HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &key)
+            != ERROR_SUCCESS)
+            return {};
+    }
+
+    char text[512]{};
+    DWORD type = 0;
+    DWORD bytes = sizeof(text);
+    const LSTATUS st = ::RegQueryValueExA(
+        key, "Layout Text", nullptr, &type,
+        reinterpret_cast<BYTE *>(text), &bytes);
+    ::RegCloseKey(key);
+    if (st != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ))
+        return {};
+    text[sizeof(text)-1] = '\0';
+    return text;
+}
+
 void test_pure(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     eq_num("Is64Bit", old_dm.Is64Bit(), new_dm.Is64Bit());
 
@@ -691,6 +737,37 @@ void test_window(LegacyRvaClient &old_dm, dmsoft &new_dm) {
         return;
     }
     const long h = static_cast<long>(reinterpret_cast<INT_PTR>(hwnd));
+
+
+    const DWORD input_tid = ::GetWindowThreadProcessId(hwnd, nullptr);
+    const std::string layout_text =
+        current_layout_text_for_thread(input_tid);
+    if (!layout_text.empty()) {
+        eq_num("FindInputMethod-current",
+               old_dm.FindInputMethod(layout_text.c_str()),
+               new_dm.FindInputMethod(layout_text.c_str()));
+        eq_num("CheckInputMethod-current",
+               old_dm.CheckInputMethod(h, layout_text.c_str()),
+               new_dm.CheckInputMethod(h, layout_text.c_str()));
+        eq_num("ActiveInputMethod-current",
+               old_dm.ActiveInputMethod(h, layout_text.c_str()),
+               new_dm.ActiveInputMethod(h, layout_text.c_str()));
+        eq_num("CheckInputMethod-after-active",
+               old_dm.CheckInputMethod(h, layout_text.c_str()),
+               new_dm.CheckInputMethod(h, layout_text.c_str()));
+    }
+
+    const char *missing_input =
+        "__hcbyj_parity_nonexistent_input_method__";
+    eq_num("FindInputMethod-missing",
+           old_dm.FindInputMethod(missing_input),
+           new_dm.FindInputMethod(missing_input));
+    eq_num("CheckInputMethod-missing",
+           old_dm.CheckInputMethod(h, missing_input),
+           new_dm.CheckInputMethod(h, missing_input));
+    eq_num("ActiveInputMethod-missing",
+           old_dm.ActiveInputMethod(h, missing_input),
+           new_dm.ActiveInputMethod(h, missing_input));
 
     eq_num("GetWindowProcessId", old_dm.GetWindowProcessId(h), new_dm.GetWindowProcessId(h));
     eq_num("GetWindowThreadId", old_dm.GetWindowThreadId(h), new_dm.GetWindowThreadId(h));
