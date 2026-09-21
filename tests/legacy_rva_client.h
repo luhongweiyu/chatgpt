@@ -357,6 +357,12 @@ public:
     long EnableBind(long en) { using F=long(WINAPI*)(long,long); return at<F>(105248)(obj_,en); }
     long SwitchBindWindow(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(109328)(obj_,hwnd); }
 
+    long GetCpuType() { using F=long(WINAPI*)(long); return at<F>(126192)(obj_); }
+    const char *GetCursorSpot() { using F=PCSTR(WINAPI*)(long); return at<F>(120032)(obj_); }
+    long IsDisplayDead(long x1,long y1,long x2,long y2,long t) { using F=long(WINAPI*)(long,long,long,long,long,long); return at<F>(104992)(obj_,x1,y1,x2,y2,t); }
+    long SpeedNormalGraphic(long en) { using F=long(WINAPI*)(long,long); return at<F>(124400)(obj_,en); }
+    long LockDisplay(long lock) { using F=long(WINAPI*)(long,long); return at<F>(124768)(obj_,lock); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
