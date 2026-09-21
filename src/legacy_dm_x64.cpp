@@ -1065,7 +1065,7 @@ bool GetRemoteExportDirectoryCompat(
         const SIZE_T to_read =
             (std::min)(
                 static_cast<SIZE_T>(file.SizeOfOptionalHeader),
-                sizeof(oh));
+                static_cast<SIZE_T>(sizeof(oh)));
         if (to_read <
                 offsetof(
                     IMAGE_OPTIONAL_HEADER64,
@@ -1213,7 +1213,7 @@ LONGLONG ResolveRemoteExportCompat(
 
         const LONGLONG forwarded_base =
             ModuleBaseForPidCompat(
-                pid, module);
+                pid, module.c_str());
         if (!forwarded_base)
             return 0;
 
