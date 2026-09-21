@@ -3560,6 +3560,249 @@ std::string FetchLegacyWordRegionCompat(
     return EncodeLegacyWordCompat(binary, word);
 }
 
+
+struct BinaryRectCompat {
+    long x1 = 0;
+    long y1 = 0;
+    long x2 = 0; // exclusive
+    long y2 = 0; // exclusive
+};
+
+bool RectsNearCompat(
+    const BinaryRectCompat &a,
+    const BinaryRectCompat &b,
+    long col_gap,
+    long row_gap) {
+    const long dx =
+        (std::max)(
+            0L,
+            (std::max)(a.x1, b.x1) -
+            (std::min)(a.x2, b.x2));
+    const long dy =
+        (std::max)(
+            0L,
+            (std::max)(a.y1, b.y1) -
+            (std::min)(a.y2, b.y2));
+    return dx <= col_gap && dy <= row_gap;
+}
+
+std::vector<BinaryRectCompat> ExtractBinaryComponentsCompat(
+    const OcrBinaryCompat &binary,
+    long col_gap,
+    long row_gap) {
+    std::vector<BinaryRectCompat> rects;
+    if (binary.width <= 0 || binary.height <= 0)
+        return rects;
+
+    const size_t total =
+        static_cast<size_t>(binary.width) *
+        static_cast<size_t>(binary.height);
+    std::vector<unsigned char> seen(total, 0);
+    std::vector<long> stack;
+    stack.reserve(256);
+
+    const auto index_of = [&](long x, long y) {
+        return static_cast<size_t>(y) *
+                   static_cast<size_t>(binary.width) +
+               static_cast<size_t>(x);
+    };
+
+    for (long sy = 0; sy < binary.height; ++sy) {
+        for (long sx = 0; sx < binary.width; ++sx) {
+            const size_t start = index_of(sx, sy);
+            if (seen[start] || !binary.At(sx, sy))
+                continue;
+
+            BinaryRectCompat rc{
+                sx, sy, sx + 1, sy + 1};
+            stack.clear();
+            stack.push_back(
+                static_cast<long>(start));
+            seen[start] = 1;
+
+            while (!stack.empty()) {
+                const long flat = stack.back();
+                stack.pop_back();
+                const long x =
+                    flat % binary.width;
+                const long y =
+                    flat / binary.width;
+
+                rc.x1 = (std::min)(rc.x1, x);
+                rc.y1 = (std::min)(rc.y1, y);
+                rc.x2 = (std::max)(rc.x2, x + 1);
+                rc.y2 = (std::max)(rc.y2, y + 1);
+
+                static const long dx[4] =
+                    {-1, 1, 0, 0};
+                static const long dy[4] =
+                    {0, 0, -1, 1};
+                for (int k = 0; k < 4; ++k) {
+                    const long nx = x + dx[k];
+                    const long ny = y + dy[k];
+                    if (nx < 0 || ny < 0 ||
+                        nx >= binary.width ||
+                        ny >= binary.height)
+                        continue;
+                    const size_t ni =
+                        index_of(nx, ny);
+                    if (seen[ni] ||
+                        !binary.At(nx, ny))
+                        continue;
+                    seen[ni] = 1;
+                    stack.push_back(
+                        static_cast<long>(ni));
+                }
+            }
+            rects.push_back(rc);
+        }
+    }
+
+    col_gap = (std::max)(0L, col_gap);
+    row_gap = (std::max)(0L, row_gap);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t i = 0;
+             i < rects.size() && !changed; ++i) {
+            for (size_t j = i + 1;
+                 j < rects.size(); ++j) {
+                if (!RectsNearCompat(
+                        rects[i], rects[j],
+                        col_gap, row_gap))
+                    continue;
+                rects[i].x1 =
+                    (std::min)(
+                        rects[i].x1, rects[j].x1);
+                rects[i].y1 =
+                    (std::min)(
+                        rects[i].y1, rects[j].y1);
+                rects[i].x2 =
+                    (std::max)(
+                        rects[i].x2, rects[j].x2);
+                rects[i].y2 =
+                    (std::max)(
+                        rects[i].y2, rects[j].y2);
+                rects.erase(rects.begin() + j);
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    std::stable_sort(
+        rects.begin(), rects.end(),
+        [](const BinaryRectCompat &a,
+           const BinaryRectCompat &b) {
+            if (std::labs(a.y1 - b.y1) < 9)
+                return a.x1 < b.x1;
+            return a.y1 < b.y1;
+        });
+    return rects;
+}
+
+std::string EncodeBinaryRectCompat(
+    const OcrBinaryCompat &binary,
+    const BinaryRectCompat &rc) {
+    if (rc.x1 < 0 || rc.y1 < 0 ||
+        rc.x2 > binary.width ||
+        rc.y2 > binary.height ||
+        rc.x2 <= rc.x1 ||
+        rc.y2 <= rc.y1)
+        return {};
+
+    static constexpr char kHex[] =
+        "0123456789ABCDEF";
+    std::string hex;
+    unsigned nibble = 0;
+    int nibble_bits = 0;
+    long foreground = 0;
+
+    for (long x = rc.x1; x < rc.x2; ++x) {
+        for (long y = rc.y1; y < rc.y2; ++y) {
+            const bool bit =
+                binary.At(x, y) != 0;
+            foreground += bit ? 1 : 0;
+            nibble =
+                (nibble << 1) |
+                (bit ? 1u : 0u);
+            if (++nibble_bits == 4) {
+                hex.push_back(
+                    kHex[nibble & 0x0F]);
+                nibble = 0;
+                nibble_bits = 0;
+            }
+        }
+    }
+    if (nibble_bits) {
+        nibble <<= (4 - nibble_bits);
+        hex.push_back(
+            kHex[nibble & 0x0F]);
+    }
+    if (foreground == 0)
+        return {};
+
+    return hex + "$$0.0." +
+           std::to_string(foreground) +
+           "$" +
+           std::to_string(rc.y2 - rc.y1);
+}
+
+std::string EncodeNoDictGroupsCompat(
+    const OcrBinaryCompat &binary,
+    std::vector<BinaryRectCompat> rects,
+    long base_x, long base_y,
+    long word_gap,
+    long line_height) {
+    if (rects.empty()) return {};
+    word_gap = (std::max)(0L, word_gap);
+    line_height = (std::max)(1L, line_height);
+
+    std::vector<BinaryRectCompat> groups;
+    for (const auto &rc : rects) {
+        BinaryRectCompat *best = nullptr;
+        for (auto &g : groups) {
+            const long vertical =
+                std::labs(g.y1 - rc.y1);
+            const long gap =
+                rc.x1 - g.x2;
+            if (vertical <= line_height &&
+                gap >= 0 &&
+                gap <= word_gap) {
+                best = &g;
+                break;
+            }
+        }
+        if (!best) {
+            groups.push_back(rc);
+        } else {
+            best->x1 =
+                (std::min)(best->x1, rc.x1);
+            best->y1 =
+                (std::min)(best->y1, rc.y1);
+            best->x2 =
+                (std::max)(best->x2, rc.x2);
+            best->y2 =
+                (std::max)(best->y2, rc.y2);
+        }
+    }
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < groups.size(); ++i) {
+        if (i) oss << ',';
+        oss << base_x + groups[i].x1;
+    }
+    oss << '|';
+    for (size_t i = 0; i < groups.size(); ++i) {
+        if (i) oss << ',';
+        oss << base_y + groups[i].y1;
+    }
+    for (const auto &g : groups)
+        oss << '|' <<
+            EncodeBinaryRectCompat(binary, g);
+    return oss.str();
+}
+
 std::string OcrTextCompat(
     const std::vector<OcrResultCompat> &results) {
     std::string out;
@@ -9828,6 +10071,54 @@ const char *dmsoft::GetWords(
     p->scratch = EncodeWordGroupsCompat(
         GroupOcrWordsCompat(
             results, word_gap, line_height));
+    return p->scratch.c_str();
+}
+
+
+const char *dmsoft::GetWordsNoDict(
+    long x1, long y1, long x2, long y2,
+    PCSTR color) {
+    auto *p = P(impl);
+    if (!p || !color || !*color ||
+        x2 < x1 || y2 < y1)
+        return "";
+
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionForObjectCompat(
+            p, x1, y1, x2, y2, image)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    OcrBinaryCompat binary;
+    if (!BuildOcrBinaryCompat(
+            image, color, 1.0, binary)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    long row_gap = 1;
+    long col_gap = 1;
+    long word_gap = 5;
+    long line_height = 10;
+    {
+        std::lock_guard<std::mutex> lock(
+            p->state_mutex);
+        row_gap = p->nodict_row_gap;
+        col_gap = p->nodict_col_gap;
+        word_gap = p->nodict_word_gap;
+        line_height =
+            p->nodict_word_line_height;
+    }
+
+    auto rects =
+        ExtractBinaryComponentsCompat(
+            binary, col_gap, row_gap);
+    p->scratch =
+        EncodeNoDictGroupsCompat(
+            binary, std::move(rects),
+            x1, y1,
+            word_gap, line_height);
     return p->scratch.c_str();
 }
 
