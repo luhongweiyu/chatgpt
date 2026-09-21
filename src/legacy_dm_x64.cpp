@@ -2296,6 +2296,67 @@ WordResultCompat ParseWordResultCompat(PCSTR str) {
     return out;
 }
 
+
+struct SlashWordResultItemCompat {
+    long x = 0;
+    long y = 0;
+    std::string text;
+};
+
+struct SlashWordResultCompat {
+    bool valid = false;
+    std::vector<SlashWordResultItemCompat> items;
+};
+
+SlashWordResultCompat ParseSlashWordResultCompat(PCSTR str) {
+    SlashWordResultCompat out;
+    if (!str || !*str) return out;
+    const std::string text(str);
+
+    size_t begin = 0;
+    while (begin < text.size()) {
+        size_t end = text.find('/', begin);
+        if (end == std::string::npos)
+            end = text.size();
+
+        if (end > begin) {
+            const std::string item =
+                text.substr(begin, end - begin);
+            const size_t dash = item.find('-');
+            const size_t comma = item.find(',');
+            if (dash == std::string::npos ||
+                comma == std::string::npos ||
+                comma > dash) {
+                out.items.clear();
+                return out;
+            }
+
+            long x = 0, y = 0;
+            if (!ParseLongCompat(
+                    item.substr(0, comma), x) ||
+                !ParseLongCompat(
+                    item.substr(
+                        comma + 1,
+                        dash - comma - 1), y)) {
+                out.items.clear();
+                return out;
+            }
+
+            SlashWordResultItemCompat parsed{};
+            parsed.x = x;
+            parsed.y = y;
+            parsed.text = item.substr(dash + 1);
+            out.items.push_back(std::move(parsed));
+        }
+
+        if (end == text.size())
+            break;
+        begin = end + 1;
+    }
+    out.valid = !out.items.empty();
+    return out;
+}
+
 bool ParseDecimalFieldCompat(const std::string &s, long &value) {
     if (s.empty()) return false;
     char *end = nullptr;
@@ -7113,17 +7174,28 @@ const char *dmsoft::SortPosDistance(PCSTR all_pos, long type, long x, long y) {
 long dmsoft::GetWordResultCount(PCSTR str) {
     if (!str || !*str) return 0;
     const std::string text(str);
-    const size_t first_pipe = text.find('|');
-    if (first_pipe == std::string::npos) return 0;
 
-    long count = 1;
-    for (size_t i = 0; i < first_pipe; ++i) {
-        if (text[i] == ',') ++count;
+    if (text.find('|') != std::string::npos) {
+        const size_t first_pipe = text.find('|');
+        if (first_pipe == std::string::npos)
+            return 0;
+        long count = 1;
+        for (size_t i = 0; i < first_pipe; ++i) {
+            if (text[i] == ',') ++count;
+        }
+        return count;
     }
-    return count;
+
+    const auto slash =
+        ParseSlashWordResultCompat(str);
+    return slash.valid
+        ? static_cast<long>(slash.items.size())
+        : 0;
 }
 
-long dmsoft::GetWordResultPos(PCSTR str, long index, long *x, long *y) {
+long dmsoft::GetWordResultPos(
+    PCSTR str, long index,
+    long *x, long *y) {
     if (!x || !y) return 0;
     *x = -1;
     *y = -1;
@@ -7131,22 +7203,46 @@ long dmsoft::GetWordResultPos(PCSTR str, long index, long *x, long *y) {
     const long count = GetWordResultCount(str);
     if (index >= count) return 0;
 
-    const WordResultCompat parsed = ParseWordResultCompat(str);
-    if (!parsed.has_first_pipe) return 0;
+    const std::string text =
+        str ? std::string(str) : std::string();
+    if (text.find('|') != std::string::npos) {
+        const WordResultCompat parsed =
+            ParseWordResultCompat(str);
+        if (!parsed.has_first_pipe) return 0;
 
-    if (index >= 0) {
-        if (static_cast<size_t>(index) < parsed.xs.size())
-            ParseDecimalFieldCompat(parsed.xs[static_cast<size_t>(index)], *x);
-        if (static_cast<size_t>(index) < parsed.ys.size())
-            ParseDecimalFieldCompat(parsed.ys[static_cast<size_t>(index)], *y);
+        if (index >= 0) {
+            if (static_cast<size_t>(index) <
+                parsed.xs.size())
+                ParseDecimalFieldCompat(
+                    parsed.xs[
+                        static_cast<size_t>(index)],
+                    *x);
+            if (static_cast<size_t>(index) <
+                parsed.ys.size())
+                ParseDecimalFieldCompat(
+                    parsed.ys[
+                        static_cast<size_t>(index)],
+                    *y);
+        }
+        return 1;
     }
 
-    // The original helper returns success for negative index as long as
-    // index < count; x/y remain -1.
+    const auto slash =
+        ParseSlashWordResultCompat(str);
+    if (!slash.valid || index < 0 ||
+        static_cast<size_t>(index) >=
+            slash.items.size())
+        return index < 0 && count > 0 ? 1 : 0;
+
+    *x = slash.items[
+        static_cast<size_t>(index)].x;
+    *y = slash.items[
+        static_cast<size_t>(index)].y;
     return 1;
 }
 
-const char *dmsoft::GetWordResultStr(PCSTR str, long index) {
+const char *dmsoft::GetWordResultStr(
+    PCSTR str, long index) {
     auto *p = P(impl);
     if (!p) return "";
 
@@ -7156,14 +7252,36 @@ const char *dmsoft::GetWordResultStr(PCSTR str, long index) {
         return p->scratch.c_str();
     }
 
-    const WordResultCompat parsed = ParseWordResultCompat(str);
-    if (!parsed.has_second_pipe || index < 0 ||
-        static_cast<size_t>(index) >= parsed.words.size()) {
-        p->scratch.clear();
+    const std::string text =
+        str ? std::string(str) : std::string();
+    if (text.find('|') != std::string::npos) {
+        const WordResultCompat parsed =
+            ParseWordResultCompat(str);
+        if (!parsed.has_second_pipe ||
+            index < 0 ||
+            static_cast<size_t>(index) >=
+                parsed.words.size()) {
+            p->scratch.clear();
+            return p->scratch.c_str();
+        }
+
+        p->scratch =
+            parsed.words[
+                static_cast<size_t>(index)];
         return p->scratch.c_str();
     }
 
-    p->scratch = parsed.words[static_cast<size_t>(index)];
+    const auto slash =
+        ParseSlashWordResultCompat(str);
+    if (!slash.valid || index < 0 ||
+        static_cast<size_t>(index) >=
+            slash.items.size()) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch =
+        slash.items[
+            static_cast<size_t>(index)].text;
     return p->scratch.c_str();
 }
 
