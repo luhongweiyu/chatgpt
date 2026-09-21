@@ -3438,6 +3438,118 @@ bool CopyFromLegacyPointerCompat(long data, void *dst, SIZE_T size) {
            got == size;
 }
 
+
+bool FindKeyboardLayoutByTextCompat(
+    PCSTR layout_text, std::string &klid_out) {
+    klid_out.clear();
+    if (!layout_text || !*layout_text) return false;
+
+    HKEY root = nullptr;
+    if (::RegOpenKeyExA(
+            HKEY_LOCAL_MACHINE,
+            "SYSTEM\\CurrentControlSet\\Control\\Keyboard Layouts",
+            0, KEY_READ, &root) != ERROR_SUCCESS)
+        return false;
+
+    bool found = false;
+    DWORD index = 0;
+    for (;;) {
+        char subkey[256]{};
+        DWORD subkey_len = static_cast<DWORD>(sizeof(subkey));
+        FILETIME ft{};
+        const LSTATUS enum_status = ::RegEnumKeyExA(
+            root, index++, subkey, &subkey_len,
+            nullptr, nullptr, nullptr, &ft);
+        if (enum_status == ERROR_NO_MORE_ITEMS) break;
+        if (enum_status != ERROR_SUCCESS) continue;
+
+        HKEY key = nullptr;
+        if (::RegOpenKeyExA(root, subkey, 0, KEY_READ, &key) != ERROR_SUCCESS)
+            continue;
+
+        char text[512]{};
+        DWORD type = 0;
+        DWORD bytes = sizeof(text);
+        const LSTATUS get_status = ::RegQueryValueExA(
+            key, "Layout Text", nullptr, &type,
+            reinterpret_cast<BYTE *>(text), &bytes);
+        ::RegCloseKey(key);
+
+        if (get_status != ERROR_SUCCESS ||
+            (type != REG_SZ && type != REG_EXPAND_SZ))
+            continue;
+
+        text[sizeof(text)-1] = '\0';
+        if (_stricmp(text, layout_text) == 0) {
+            klid_out.assign(subkey, subkey_len);
+            found = true;
+            break;
+        }
+    }
+
+    ::RegCloseKey(root);
+    return found;
+}
+
+std::string HklToKlidCompat(HKL hkl) {
+    char buf[16]{};
+    const unsigned long value =
+        static_cast<unsigned long>(
+            reinterpret_cast<ULONG_PTR>(hkl) & 0xffffffffULL);
+    std::snprintf(buf, sizeof(buf), "%08lX", value);
+    return buf;
+}
+
+bool ThreadUsesLayoutTextCompat(HWND hwnd, PCSTR layout_text) {
+    if (!hwnd || !layout_text || !*layout_text) return false;
+    std::string wanted;
+    if (!FindKeyboardLayoutByTextCompat(layout_text, wanted))
+        return false;
+
+    const DWORD tid = ::GetWindowThreadProcessId(hwnd, nullptr);
+    if (!tid) return false;
+    const HKL hkl = ::GetKeyboardLayout(tid);
+    if (!hkl) return false;
+
+    const std::string current = HklToKlidCompat(hkl);
+    if (_stricmp(current.c_str(), wanted.c_str()) == 0)
+        return true;
+
+    // Some IMEs expose an HKL with the low word as the language ID while
+    // the registry key is a classic 0000LLLL layout. Compare that fallback.
+    char lang_key[16]{};
+    std::snprintf(
+        lang_key, sizeof(lang_key), "0000%04X",
+        static_cast<unsigned>(LOWORD(reinterpret_cast<ULONG_PTR>(hkl))));
+    return _stricmp(lang_key, wanted.c_str()) == 0;
+}
+
+bool ActivateLayoutTextCompat(HWND hwnd, PCSTR layout_text) {
+    if (!hwnd || !::IsWindow(hwnd) || !layout_text || !*layout_text)
+        return false;
+
+    std::string klid;
+    if (!FindKeyboardLayoutByTextCompat(layout_text, klid))
+        return false;
+
+    HKL hkl = ::LoadKeyboardLayoutA(
+        klid.c_str(), KLF_NOTELLSHELL);
+    if (!hkl) return false;
+
+    const LRESULT result = ::SendMessageA(
+        hwnd, WM_INPUTLANGCHANGEREQUEST,
+        0, reinterpret_cast<LPARAM>(hkl));
+    (void)result;
+
+    // The target may process the request asynchronously in some frameworks.
+    for (int i = 0; i < 10; ++i) {
+        if (ThreadUsesLayoutTextCompat(hwnd, layout_text))
+            return true;
+        ::Sleep(10);
+    }
+    return ThreadUsesLayoutTextCompat(hwnd, layout_text);
+}
+
 } // namespace
 
 extern "C" HCBYJ64_API BOOL LoadDm(PCSTR path) { return hcbyj64::OpRuntime::Configure(path) ? TRUE : FALSE; }
@@ -6973,6 +7085,20 @@ long dmsoft::FreeScreenData(long handle) {
     if (handle != 0 && handle != current) return 0;
     FreeLegacyBinBufferCompat(p);
     return 1;
+}
+
+
+long dmsoft::FindInputMethod(PCSTR id) {
+    std::string klid;
+    return FindKeyboardLayoutByTextCompat(id, klid) ? 1 : 0;
+}
+
+long dmsoft::CheckInputMethod(long hwnd, PCSTR id) {
+    return ThreadUsesLayoutTextCompat(HwndFromLong(hwnd), id) ? 1 : 0;
+}
+
+long dmsoft::ActiveInputMethod(long hwnd, PCSTR id) {
+    return ActivateLayoutTextCompat(HwndFromLong(hwnd), id) ? 1 : 0;
 }
 
 #include "legacy_dm_generated.inc"
