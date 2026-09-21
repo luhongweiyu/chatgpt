@@ -416,6 +416,11 @@ public:
 
     const char *OcrInFile(long x1,long y1,long x2,long y2,PCSTR pic_name,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(125824)(obj_,x1,y1,x2,y2,pic_name,color,sim); }
 
+    const char *GetDictInfo(PCSTR str,PCSTR font_name,long font_size,long flag) { using F=PCSTR(WINAPI*)(long,PCSTR,PCSTR,long,long); return at<F>(107872)(obj_,str,font_name,font_size,flag); }
+    long FindStrWithFont(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim,PCSTR font_name,long font_size,long flag,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,PCSTR,long,long,long*,long*); return at<F>(125104)(obj_,x1,y1,x2,y2,str,color,sim,font_name,font_size,flag,x,y); }
+    const char *FindStrWithFontE(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim,PCSTR font_name,long font_size,long flag) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,PCSTR,long,long); return at<F>(112976)(obj_,x1,y1,x2,y2,str,color,sim,font_name,font_size,flag); }
+    const char *FindStrWithFontEx(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim,PCSTR font_name,long font_size,long flag) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,PCSTR,long,long); return at<F>(118608)(obj_,x1,y1,x2,y2,str,color,sim,font_name,font_size,flag); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
