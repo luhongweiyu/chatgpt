@@ -3689,6 +3689,89 @@ std::string FindStrExFromOcrCompat(
     return oss.str();
 }
 
+
+struct OcrWordGroupCompat {
+    long x = 0;
+    long y = 0;
+    long right = 0;
+    std::string text;
+};
+
+std::vector<OcrWordGroupCompat> GroupOcrWordsCompat(
+    const std::vector<OcrResultCompat> &results,
+    long word_gap,
+    long line_height) {
+    std::vector<OcrWordGroupCompat> groups;
+    if (results.empty()) return groups;
+
+    word_gap = (std::max)(0L, word_gap);
+    line_height = (std::max)(1L, line_height);
+
+    for (const auto &item : results) {
+        OcrWordGroupCompat *best = nullptr;
+        for (auto &group : groups) {
+            if (std::labs(group.y - item.y) >
+                line_height)
+                continue;
+
+            const long gap =
+                item.x - group.right;
+            if (gap < -line_height ||
+                gap > word_gap)
+                continue;
+            best = &group;
+            break;
+        }
+
+        if (!best) {
+            OcrWordGroupCompat group{};
+            group.x = item.x;
+            group.y = item.y;
+            group.right = item.x + item.width;
+            group.text = item.text;
+            groups.push_back(std::move(group));
+            continue;
+        }
+
+        best->text += item.text;
+        best->right =
+            (std::max)(
+                best->right,
+                item.x + item.width);
+        best->y =
+            (std::min)(best->y, item.y);
+    }
+
+    std::stable_sort(
+        groups.begin(), groups.end(),
+        [](const OcrWordGroupCompat &a,
+           const OcrWordGroupCompat &b) {
+            if (std::labs(a.y - b.y) < 9)
+                return a.x < b.x;
+            return a.y < b.y;
+        });
+    return groups;
+}
+
+std::string EncodeWordGroupsCompat(
+    const std::vector<OcrWordGroupCompat> &groups) {
+    if (groups.empty()) return {};
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < groups.size(); ++i) {
+        if (i) oss << ',';
+        oss << groups[i].x;
+    }
+    oss << '|';
+    for (size_t i = 0; i < groups.size(); ++i) {
+        if (i) oss << ',';
+        oss << groups[i].y;
+    }
+    for (const auto &group : groups)
+        oss << '|' << group.text;
+    return oss.str();
+}
+
 std::string RgbHexCompat(const RgbColorCompat &c) {
     char buf[7]{};
     std::snprintf(buf, sizeof(buf), "%02x%02x%02x", c.r, c.g, c.b);
@@ -9716,6 +9799,35 @@ const char *dmsoft::FetchWord(
     if (!p) return "";
     p->scratch = FetchLegacyWordRegionCompat(
         p, x1, y1, x2, y2, color, word);
+    return p->scratch.c_str();
+}
+
+
+const char *dmsoft::GetWords(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    long word_gap = 5;
+    long line_height = 10;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        word_gap = p->word_gap;
+        line_height = p->word_line_height;
+    }
+
+    p->scratch = EncodeWordGroupsCompat(
+        GroupOcrWordsCompat(
+            results, word_gap, line_height));
     return p->scratch.c_str();
 }
 
