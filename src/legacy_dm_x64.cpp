@@ -3877,9 +3877,9 @@ std::string OcrExTextCompat(
     std::ostringstream oss;
     for (size_t i = 0; i < results.size(); ++i) {
         if (i) oss << '|';
-        oss << results[i].x << ','
-            << results[i].y << ','
-            << results[i].text;
+        oss << results[i].text << ','
+            << results[i].x << ','
+            << results[i].y;
     }
     return oss.str();
 }
@@ -10365,6 +10365,30 @@ const char *dmsoft::FindStrFastExS(
     return FindStrExS(
         x1, y1, x2, y2,
         str, color, sim);
+}
+
+
+const char *dmsoft::OcrExOne(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionCompat(
+            p, x1, y1, x2, y2,
+            color, sim, results) ||
+        results.empty()) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    const auto &item = results.front();
+    p->scratch =
+        item.text + "," +
+        std::to_string(item.x) + "," +
+        std::to_string(item.y);
+    return p->scratch.c_str();
 }
 
 #include "legacy_dm_generated.inc"
