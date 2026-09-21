@@ -3469,6 +3469,97 @@ bool RecognizeOcrRegionCompat(
     return true;
 }
 
+
+std::string EncodeLegacyWordCompat(
+    const OcrBinaryCompat &binary,
+    PCSTR word) {
+    if (!word || !*word ||
+        std::strchr(word, '$') ||
+        binary.width <= 0 ||
+        binary.height <= 0)
+        return {};
+
+    long min_x = binary.width;
+    long min_y = binary.height;
+    long max_x = -1;
+    long max_y = -1;
+    long count = 0;
+
+    for (long x = 0; x < binary.width; ++x) {
+        for (long y = 0; y < binary.height; ++y) {
+            if (!binary.At(x, y)) continue;
+            min_x = (std::min)(min_x, x);
+            min_y = (std::min)(min_y, y);
+            max_x = (std::max)(max_x, x);
+            max_y = (std::max)(max_y, y);
+            ++count;
+        }
+    }
+    if (max_x < min_x || max_y < min_y || count <= 0)
+        return {};
+
+    const long width = max_x - min_x + 1;
+    const long height = max_y - min_y + 1;
+    if (width <= 0 || height <= 0 || height > 255)
+        return {};
+
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string hex;
+    const size_t bit_count =
+        static_cast<size_t>(width) *
+        static_cast<size_t>(height);
+    hex.reserve((bit_count + 3u) / 4u);
+
+    unsigned nibble = 0;
+    int nibble_bits = 0;
+    for (long x = min_x; x <= max_x; ++x) {
+        for (long y = min_y; y <= max_y; ++y) {
+            nibble =
+                (nibble << 1) |
+                (binary.At(x, y) ? 1u : 0u);
+            ++nibble_bits;
+            if (nibble_bits == 4) {
+                hex.push_back(kHex[nibble & 0x0F]);
+                nibble = 0;
+                nibble_bits = 0;
+            }
+        }
+    }
+    if (nibble_bits != 0) {
+        nibble <<= (4 - nibble_bits);
+        hex.push_back(kHex[nibble & 0x0F]);
+    }
+
+    // Old DM dictionaries use four '$'-separated fields:
+    // HEX$label$left.right.foreground_count$height.
+    // The matching core only relies on foreground_count from the third
+    // field; freshly extracted tight glyphs therefore use 0.0.count.
+    return hex + "$" + word +
+           "$0.0." + std::to_string(count) +
+           "$" + std::to_string(height);
+}
+
+std::string FetchLegacyWordRegionCompat(
+    DmImpl *p,
+    long x1, long y1, long x2, long y2,
+    PCSTR color, PCSTR word) {
+    if (!p || x2 < x1 || y2 < y1 ||
+        !color || !*color || !word || !*word)
+        return {};
+
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionForObjectCompat(
+            p, x1, y1, x2, y2, image))
+        return {};
+
+    OcrBinaryCompat binary;
+    if (!BuildOcrBinaryCompat(
+            image, color, 1.0, binary))
+        return {};
+
+    return EncodeLegacyWordCompat(binary, word);
+}
+
 std::string OcrTextCompat(
     const std::vector<OcrResultCompat> &results) {
     std::string out;
@@ -9614,6 +9705,17 @@ const char *dmsoft::FindStrFastE(
         std::to_string(id) + "|" +
         std::to_string(x) + "|" +
         std::to_string(y);
+    return p->scratch.c_str();
+}
+
+
+const char *dmsoft::FetchWord(
+    long x1, long y1, long x2, long y2,
+    PCSTR color, PCSTR word) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = FetchLegacyWordRegionCompat(
+        p, x1, y1, x2, y2, color, word);
     return p->scratch.c_str();
 }
 
