@@ -21,6 +21,7 @@
 #include <intrin.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -54,6 +55,162 @@ struct ExcludeRegionCompat {
     long x2 = 0;
     long y2 = 0;
 };
+
+
+struct LegacyDictEntryCompat {
+    std::string raw;
+    std::string bitmap;
+    std::string word;
+    long left = 0;
+    long right = 0;
+    long declared_count = 0;
+    long height = 0;
+};
+
+bool ParseLegacyDictEntryCompat(PCSTR text, LegacyDictEntryCompat &out) {
+    out = {};
+    if (!text || !*text) return false;
+    const std::string source(text);
+    const auto parts = SplitCompat(source, '$');
+    if (parts.size() != 4 ||
+        parts[0].empty() || parts[1].empty() ||
+        parts[2].empty() || parts[3].empty())
+        return false;
+
+    for (char ch : parts[0]) {
+        if (!std::isxdigit(static_cast<unsigned char>(ch)))
+            return false;
+    }
+
+    long left = 0, right = 0, count = 0;
+    {
+        const auto metrics = SplitCompat(parts[2], '.');
+        if (metrics.size() != 3 ||
+            !ParseLongCompat(metrics[0], left) ||
+            !ParseLongCompat(metrics[1], right) ||
+            !ParseLongCompat(metrics[2], count))
+            return false;
+    }
+
+    long height = 0;
+    if (!ParseLongCompat(parts[3], height) ||
+        height <= 0 || height > 255)
+        return false;
+
+    std::string bitmap = parts[0];
+    std::transform(
+        bitmap.begin(), bitmap.end(), bitmap.begin(),
+        [](unsigned char c) {
+            return static_cast<char>(std::toupper(c));
+        });
+
+    out.raw = source;
+    out.bitmap = std::move(bitmap);
+    out.word = parts[1];
+    out.left = left;
+    out.right = right;
+    out.declared_count = count;
+    out.height = height;
+    return true;
+}
+
+std::string LegacyDictKeyCompat(const LegacyDictEntryCompat &entry) {
+    return entry.bitmap + "$" + std::to_string(entry.height);
+}
+
+bool LoadLegacyDictTextCompat(
+    const char *data, size_t size,
+    std::vector<LegacyDictEntryCompat> &out) {
+    out.clear();
+    if (!data || size == 0) return false;
+
+    std::string text(data, size);
+    if (text.size() >= 3 &&
+        static_cast<unsigned char>(text[0]) == 0xEF &&
+        static_cast<unsigned char>(text[1]) == 0xBB &&
+        static_cast<unsigned char>(text[2]) == 0xBF)
+        text.erase(0, 3);
+
+    std::unordered_map<std::string, size_t> seen;
+    size_t begin = 0;
+    while (begin <= text.size()) {
+        size_t end = text.find_first_of("\r\n", begin);
+        if (end == std::string::npos) end = text.size();
+
+        std::string line = text.substr(begin, end - begin);
+        while (!line.empty() &&
+               (line.back() == '\r' || line.back() == '\n'))
+            line.pop_back();
+
+        if (!line.empty()) {
+            LegacyDictEntryCompat entry;
+            if (ParseLegacyDictEntryCompat(line.c_str(), entry)) {
+                const std::string key = LegacyDictKeyCompat(entry);
+                const auto it = seen.find(key);
+                if (it == seen.end()) {
+                    seen.emplace(key, out.size());
+                    out.push_back(std::move(entry));
+                } else {
+                    out[it->second] = std::move(entry);
+                }
+            }
+        }
+
+        if (end == text.size()) break;
+        begin = end + 1;
+        if (begin < text.size() &&
+            text[end] == '\r' && text[begin] == '\n')
+            ++begin;
+    }
+    return !out.empty();
+}
+
+bool ReadLegacyDictFileCompat(
+    const std::filesystem::path &path,
+    std::vector<LegacyDictEntryCompat> &out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        out.clear();
+        return false;
+    }
+    const std::string bytes(
+        std::istreambuf_iterator<char>(in),
+        std::istreambuf_iterator<char>());
+    return LoadLegacyDictTextCompat(bytes.data(), bytes.size(), out);
+}
+
+bool SaveLegacyDictFileCompat(
+    const std::filesystem::path &path,
+    const std::vector<LegacyDictEntryCompat> &entries) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        out.write(
+            entries[i].raw.data(),
+            static_cast<std::streamsize>(entries[i].raw.size()));
+        if (i + 1 < entries.size())
+            out.write("\r\n", 2);
+    }
+    return out.good();
+}
+
+long UpsertLegacyDictEntryCompat(
+    std::vector<LegacyDictEntryCompat> &entries,
+    PCSTR dict_info) {
+    LegacyDictEntryCompat entry;
+    if (!ParseLegacyDictEntryCompat(dict_info, entry))
+        return 0;
+
+    const std::string key = LegacyDictKeyCompat(entry);
+    for (auto &existing : entries) {
+        if (LegacyDictKeyCompat(existing) == key) {
+            existing = std::move(entry);
+            return 1;
+        }
+    }
+    entries.push_back(std::move(entry));
+    return 1;
+}
 
 struct DmImpl {
     hcbyj64::OpObject op;
@@ -107,6 +264,8 @@ struct DmImpl {
     // OCR / dictionary state. Keep the legacy defaults so x86 parity can
     // validate behavior before the recognition engine itself is migrated.
     long current_dict = 0;
+    std::array<std::vector<LegacyDictEntryCompat>, 100> dictionaries;
+    std::array<std::string, 100> dictionary_sources;
     bool share_dict_enabled = false;
     bool exact_ocr_enabled = false;
     long min_row_gap = 0;
@@ -7903,6 +8062,125 @@ long dmsoft::LockDisplay(long lock) {
         p->display_locked = true;
     }
     return 1;
+}
+
+
+long dmsoft::SetDict(long index, PCSTR dict_name) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index >= 100 ||
+        !dict_name || !*dict_name)
+        return 0;
+
+    // Encrypted dictionaries are a separate legacy path. Do not silently
+    // treat encrypted bytes as plaintext.
+    if (!p->dict_password.empty())
+        return 0;
+
+    const std::filesystem::path path =
+        ResolveObjectFilePathCompat(p, dict_name);
+    std::vector<LegacyDictEntryCompat> entries;
+    if (!ReadLegacyDictFileCompat(path, entries))
+        return 0;
+
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->dictionaries[static_cast<size_t>(index)] =
+        std::move(entries);
+    p->dictionary_sources[static_cast<size_t>(index)] =
+        path.string();
+    return 1;
+}
+
+const char *dmsoft::GetDict(long index, long font_index) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index >= 100 ||
+        font_index < 0) return "";
+
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    const auto &dict =
+        p->dictionaries[static_cast<size_t>(index)];
+    if (static_cast<size_t>(font_index) >= dict.size()) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch =
+        dict[static_cast<size_t>(font_index)].raw;
+    return p->scratch.c_str();
+}
+
+long dmsoft::SetDictMem(long index, long addr, long size) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index >= 100 ||
+        addr == 0 || size <= 0)
+        return 0;
+
+    const char *data = reinterpret_cast<const char *>(
+        static_cast<ULONG_PTR>(
+            static_cast<unsigned long>(addr)));
+
+    std::vector<LegacyDictEntryCompat> entries;
+    __try {
+        if (!LoadLegacyDictTextCompat(
+                data, static_cast<size_t>(size), entries))
+            return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->dictionaries[static_cast<size_t>(index)] =
+        std::move(entries);
+    p->dictionary_sources[static_cast<size_t>(index)].clear();
+    return 1;
+}
+
+long dmsoft::AddDict(long index, PCSTR dict_info) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index >= 100 ||
+        !dict_info || !*dict_info)
+        return 0;
+
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    auto &dict = p->dictionaries[static_cast<size_t>(index)];
+    if (dict.size() >= 12000)
+        return 0;
+    return UpsertLegacyDictEntryCompat(dict, dict_info);
+}
+
+long dmsoft::SaveDict(long index, PCSTR file) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index >= 100 ||
+        !file || !*file)
+        return 0;
+
+    std::vector<LegacyDictEntryCompat> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        snapshot =
+            p->dictionaries[static_cast<size_t>(index)];
+    }
+
+    const std::filesystem::path path =
+        ResolveObjectFilePathCompat(p, file);
+    return SaveLegacyDictFileCompat(path, snapshot) ? 1 : 0;
+}
+
+long dmsoft::ClearDict(long index) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index >= 100)
+        return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->dictionaries[static_cast<size_t>(index)].clear();
+    p->dictionary_sources[static_cast<size_t>(index)].clear();
+    return 1;
+}
+
+long dmsoft::GetDictCount(long index) {
+    auto *p = P(impl);
+    if (!p || index < 0 || index >= 100)
+        return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    return static_cast<long>(
+        p->dictionaries[static_cast<size_t>(index)].size());
 }
 
 #include "legacy_dm_generated.inc"
