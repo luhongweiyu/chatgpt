@@ -2779,6 +2779,52 @@ void test_real_input_options(
     new_dm.EnableRealMouse(0, 0, 0);
 }
 
+
+void test_remote_api_address(
+    LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const long pid =
+        static_cast<long>(::GetCurrentProcessId());
+    old_dm.SetMemoryHwndAsProcessId(1);
+    new_dm.SetMemoryHwndAsProcessId(1);
+
+    HMODULE ntdll = ::GetModuleHandleA("ntdll.dll");
+    const auto local_ntclose =
+        reinterpret_cast<ULONG_PTR>(
+            ::GetProcAddress(ntdll, "NtClose"));
+
+    const LONGLONG old_base =
+        old_dm.GetModuleBaseAddr(pid, "ntdll.dll");
+    const LONGLONG new_base =
+        new_dm.GetModuleBaseAddr(pid, "ntdll.dll");
+    eq_num(
+        "GetRemoteApiAddress-base",
+        old_base, new_base);
+
+    const LONGLONG old_addr =
+        old_dm.GetRemoteApiAddress(
+            pid, old_base, "NtClose");
+    const LONGLONG new_addr =
+        new_dm.GetRemoteApiAddress(
+            pid, new_base, "NtClose");
+    eq_num(
+        "GetRemoteApiAddress",
+        old_addr, new_addr);
+    eq_num(
+        "GetRemoteApiAddress-actual",
+        new_addr,
+        static_cast<LONGLONG>(
+            local_ntclose));
+
+    eq_num(
+        "GetRemoteApiAddress-missing",
+        old_dm.GetRemoteApiAddress(
+            pid, old_base,
+            "__hcbyj_missing_export__"),
+        new_dm.GetRemoteApiAddress(
+            pid, new_base,
+            "__hcbyj_missing_export__"));
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2819,6 +2865,7 @@ int main(int argc, char **argv) {
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
         test_memory(old_dm, new_dm);
+        test_remote_api_address(old_dm, new_dm);
         test_memory_search(old_dm, new_dm);
         test_window(old_dm, new_dm);
         test_color_core(old_dm, new_dm);
