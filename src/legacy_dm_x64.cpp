@@ -11,6 +11,8 @@
 #include <wincrypt.h>
 #include <shellapi.h>
 #include <iphlpapi.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <wininet.h>
 #include <commdlg.h>
 #include <shobjidl.h>
@@ -420,6 +422,141 @@ std::string NormalizeGlobalPathCompat(PCSTR input) {
     if (ec) return {};
     p = p.lexically_normal();
     return p.string();
+}
+
+
+bool QueryNtpServerCompat(
+    const std::string &server,
+    std::tm &beijing_time) {
+    if (server.empty()) return false;
+
+    WSADATA wsa{};
+    if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+        return false;
+
+    bool ok = false;
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+
+    addrinfo *result = nullptr;
+    if (::getaddrinfo(
+            server.c_str(), "123", &hints, &result) == 0) {
+        for (addrinfo *ai = result; ai; ai = ai->ai_next) {
+            SOCKET sock = ::socket(
+                ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+            if (sock == INVALID_SOCKET) continue;
+
+            DWORD timeout = 1500;
+            ::setsockopt(
+                sock, SOL_SOCKET, SO_RCVTIMEO,
+                reinterpret_cast<const char *>(&timeout),
+                sizeof(timeout));
+            ::setsockopt(
+                sock, SOL_SOCKET, SO_SNDTIMEO,
+                reinterpret_cast<const char *>(&timeout),
+                sizeof(timeout));
+
+            unsigned char packet[48]{};
+            packet[0] = 0x1B; // LI=0, VN=3, Mode=3(client)
+
+            const int sent = ::sendto(
+                sock,
+                reinterpret_cast<const char *>(packet),
+                sizeof(packet), 0,
+                ai->ai_addr,
+                static_cast<int>(ai->ai_addrlen));
+            if (sent == static_cast<int>(sizeof(packet))) {
+                sockaddr_storage from{};
+                int from_len = sizeof(from);
+                const int got = ::recvfrom(
+                    sock,
+                    reinterpret_cast<char *>(packet),
+                    sizeof(packet), 0,
+                    reinterpret_cast<sockaddr *>(&from),
+                    &from_len);
+                if (got >= 48) {
+                    const unsigned mode = packet[0] & 0x07;
+                    const unsigned version =
+                        (packet[0] >> 3) & 0x07;
+                    const unsigned stratum = packet[1];
+                    if ((mode == 4 || mode == 5) &&
+                        version >= 1 && version <= 4 &&
+                        stratum != 0) {
+                        const unsigned long ntp_seconds =
+                            (static_cast<unsigned long>(packet[40]) << 24) |
+                            (static_cast<unsigned long>(packet[41]) << 16) |
+                            (static_cast<unsigned long>(packet[42]) << 8) |
+                            static_cast<unsigned long>(packet[43]);
+                        constexpr unsigned long kNtpToUnix =
+                            2208988800UL;
+                        if (ntp_seconds > kNtpToUnix) {
+                            __time64_t unix_seconds =
+                                static_cast<__time64_t>(
+                                    ntp_seconds - kNtpToUnix) +
+                                8 * 60 * 60;
+                            std::tm tm_value{};
+                            if (_gmtime64_s(
+                                    &tm_value,
+                                    &unix_seconds) == 0) {
+                                beijing_time = tm_value;
+                                ok = true;
+                            }
+                        }
+                    }
+                }
+            }
+            ::closesocket(sock);
+            if (ok) break;
+        }
+        ::freeaddrinfo(result);
+    }
+
+    ::WSACleanup();
+    return ok;
+}
+
+std::string FormatNetTimeCompat(const std::tm &tm_value) {
+    char buf[32]{};
+    std::snprintf(
+        buf, sizeof(buf),
+        "%04d-%02d-%02d %02d:%02d:%02d",
+        tm_value.tm_year + 1900,
+        tm_value.tm_mon + 1,
+        tm_value.tm_mday,
+        tm_value.tm_hour,
+        tm_value.tm_min,
+        tm_value.tm_sec);
+    return buf;
+}
+
+std::string QueryNetTimeListCompat(PCSTR servers) {
+    constexpr const char *kFailure =
+        "0000-00-00 00:00:00";
+    if (!servers || !*servers) return kFailure;
+
+    const auto list = SplitCompat(servers, '|');
+    for (const auto &raw : list) {
+        size_t first = 0;
+        while (first < raw.size() &&
+               std::isspace(
+                   static_cast<unsigned char>(raw[first])))
+            ++first;
+        size_t last = raw.size();
+        while (last > first &&
+               std::isspace(
+                   static_cast<unsigned char>(raw[last - 1])))
+            --last;
+        const std::string server =
+            raw.substr(first, last - first);
+        if (server.empty()) continue;
+
+        std::tm value{};
+        if (QueryNtpServerCompat(server, value))
+            return FormatNetTimeCompat(value);
+    }
+    return kFailure;
 }
 
 DmImpl *P(void *p) { return static_cast<DmImpl *>(p); }
@@ -8286,6 +8423,36 @@ const char *dmsoft::GetMac() {
         chosen->Address[2], chosen->Address[3],
         chosen->Address[4], chosen->Address[5]);
     p->scratch = mac;
+    return p->scratch.c_str();
+}
+
+
+const char *dmsoft::GetNetTimeByIp(PCSTR ip) {
+    auto *p = P(impl);
+    if (!p) return "";
+    p->scratch = QueryNetTimeListCompat(ip);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetNetTime() {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    // Later legacy builds keep several fallback NTP servers internally.
+    // The list is intentionally diverse so one unavailable provider does
+    // not turn the API into a permanent failure.
+    p->scratch = QueryNetTimeListCompat(
+        "ntp.aliyun.com|ntp.tencent.com|"
+        "time.windows.com|pool.ntp.org");
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::GetNetTimeSafe() {
+    auto *p = P(impl);
+    if (!p) return "";
+    // The legacy service backing this API was removed. Keep the documented
+    // failure shape instead of silently routing to a different service.
+    p->scratch = "0000-00-00 00:00:00";
     return p->scratch.c_str();
 }
 
