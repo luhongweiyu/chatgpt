@@ -401,6 +401,8 @@ public:
     const char *FindStrE(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(117456)(obj_,x1,y1,x2,y2,str,color,sim); }
     const char *FindStrFastE(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(106752)(obj_,x1,y1,x2,y2,str,color,sim); }
 
+    const char *FetchWord(long x1,long y1,long x2,long y2,PCSTR color,PCSTR word) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR); return at<F>(111776)(obj_,x1,y1,x2,y2,color,word); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
