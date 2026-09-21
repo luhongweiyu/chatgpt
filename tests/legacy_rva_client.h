@@ -386,6 +386,9 @@ public:
     long EnableSpeedDx(long en) { using F=long(WINAPI*)(long,long); return at<F>(118512)(obj_,en); }
     long SetExitThread(long en) { using F=long(WINAPI*)(long,long); return at<F>(107760)(obj_,en); }
 
+    long EnableRealKeypad(long en) { using F=long(WINAPI*)(long,long); return at<F>(121952)(obj_,en); }
+    long EnableRealMouse(long en,long delay,long step) { using F=long(WINAPI*)(long,long,long,long); return at<F>(102848)(obj_,en,delay,step); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
