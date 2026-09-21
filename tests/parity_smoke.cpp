@@ -2612,6 +2612,129 @@ void test_network_time(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     }
 }
 
+
+void test_binding_options(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    eq_num("EnableMouseMsg-unbound",
+           old_dm.EnableMouseMsg(1),
+           new_dm.EnableMouseMsg(1));
+    eq_num("EnableKeypadMsg-unbound",
+           old_dm.EnableKeypadMsg(1),
+           new_dm.EnableKeypadMsg(1));
+    eq_num("EnableKeypadPatch-unbound",
+           old_dm.EnableKeypadPatch(1),
+           new_dm.EnableKeypadPatch(1));
+    eq_num("EnableKeypadSync-unbound",
+           old_dm.EnableKeypadSync(1, 200),
+           new_dm.EnableKeypadSync(1, 200));
+    eq_num("EnableMouseSync-unbound",
+           old_dm.EnableMouseSync(1, 200),
+           new_dm.EnableMouseSync(1, 200));
+    eq_num("EnableFakeActive-unbound",
+           old_dm.EnableFakeActive(1),
+           new_dm.EnableFakeActive(1));
+    eq_num("EnableSpeedDx-unbound",
+           old_dm.EnableSpeedDx(1),
+           new_dm.EnableSpeedDx(1));
+
+    for (long en : {-1L, 0L, 1L, 2L}) {
+        eq_num(
+            ("SetExitThread-" + std::to_string(en)).c_str(),
+            old_dm.SetExitThread(en),
+            new_dm.SetExitThread(en));
+    }
+    old_dm.SetExitThread(0);
+    new_dm.SetExitThread(0);
+
+    const char *cls = "hcbyj_binding_options_window";
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = ParityWndProc;
+    wc.hInstance = ::GetModuleHandleA(nullptr);
+    wc.lpszClassName = cls;
+    ::RegisterClassA(&wc);
+
+    HWND hwnd = ::CreateWindowExA(
+        0, cls, "binding-options",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        120, 130, 260, 180,
+        nullptr, nullptr, wc.hInstance, nullptr);
+    if (!hwnd) {
+        fail("binding-options-window", "created", "failed");
+        return;
+    }
+    const long h =
+        static_cast<long>(reinterpret_cast<INT_PTR>(hwnd));
+
+    const long old_bind =
+        old_dm.BindWindow(h, "gdi", "windows", "windows", 0);
+    const long new_bind =
+        new_dm.BindWindow(h, "gdi", "windows", "windows", 0);
+    eq_num("binding-options-BindWindow", old_bind, new_bind);
+
+    if (old_bind && new_bind) {
+        for (long en : {-1L, 0L, 1L, 2L}) {
+            eq_num(
+                ("EnableMouseMsg-" + std::to_string(en)).c_str(),
+                old_dm.EnableMouseMsg(en),
+                new_dm.EnableMouseMsg(en));
+            eq_num(
+                ("EnableKeypadMsg-" + std::to_string(en)).c_str(),
+                old_dm.EnableKeypadMsg(en),
+                new_dm.EnableKeypadMsg(en));
+            eq_num(
+                ("EnableKeypadPatch-" + std::to_string(en)).c_str(),
+                old_dm.EnableKeypadPatch(en),
+                new_dm.EnableKeypadPatch(en));
+            eq_num(
+                ("EnableFakeActive-" + std::to_string(en)).c_str(),
+                old_dm.EnableFakeActive(en),
+                new_dm.EnableFakeActive(en));
+            eq_num(
+                ("EnableSpeedDx-" + std::to_string(en)).c_str(),
+                old_dm.EnableSpeedDx(en),
+                new_dm.EnableSpeedDx(en));
+        }
+
+        const struct SyncCase {
+            long enable;
+            long timeout;
+        } sync_cases[] = {
+            {-1, 100}, {0, 0}, {0, 200},
+            {1, -1}, {1, 0}, {1, 200}, {2, 200}
+        };
+        for (const auto &tc : sync_cases) {
+            eq_num(
+                "EnableKeypadSync",
+                old_dm.EnableKeypadSync(tc.enable, tc.timeout),
+                new_dm.EnableKeypadSync(tc.enable, tc.timeout));
+            eq_num(
+                "EnableMouseSync",
+                old_dm.EnableMouseSync(tc.enable, tc.timeout),
+                new_dm.EnableMouseSync(tc.enable, tc.timeout));
+        }
+
+        // Restore neutral defaults before unbind.
+        old_dm.EnableMouseMsg(1);
+        new_dm.EnableMouseMsg(1);
+        old_dm.EnableKeypadMsg(1);
+        new_dm.EnableKeypadMsg(1);
+        old_dm.EnableKeypadPatch(0);
+        new_dm.EnableKeypadPatch(0);
+        old_dm.EnableKeypadSync(0, 0);
+        new_dm.EnableKeypadSync(0, 0);
+        old_dm.EnableMouseSync(0, 0);
+        new_dm.EnableMouseSync(0, 0);
+        old_dm.EnableFakeActive(0);
+        new_dm.EnableFakeActive(0);
+        old_dm.EnableSpeedDx(0);
+        new_dm.EnableSpeedDx(0);
+    }
+
+    old_dm.UnBindWindow();
+    new_dm.UnBindWindow();
+    ::DestroyWindow(hwnd);
+    ::UnregisterClassA(cls, wc.hInstance);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
