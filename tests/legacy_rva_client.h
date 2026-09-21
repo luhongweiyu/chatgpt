@@ -412,6 +412,8 @@ public:
     const char *FindStrFastS(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim,long *x,long *y) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long*,long*); return at<F>(107504)(obj_,x1,y1,x2,y2,str,color,sim,x,y); }
     const char *FindStrFastExS(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(117232)(obj_,x1,y1,x2,y2,str,color,sim); }
 
+    const char *OcrExOne(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(123184)(obj_,x1,y1,x2,y2,color,sim); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
