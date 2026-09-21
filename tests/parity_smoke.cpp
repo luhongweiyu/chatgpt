@@ -2923,6 +2923,56 @@ void test_ocr_core(
                 "FFFFFFFF8$A$0.0.33$11");
         }
 
+        {
+            const char *a = old_dm.GetWordsNoDict(
+                0, 0, 79, 39,
+                "000000-000000");
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.GetWordsNoDict(
+                0, 0, 79, 39,
+                "000000-000000");
+            const std::string nb = b ? b : "<null>";
+            eq_str("GetWordsNoDict-controlled", oa, nb);
+
+            eq_num(
+                "GetWordsNoDict-count-old-new",
+                old_dm.GetWordResultCount(oa.c_str()),
+                new_dm.GetWordResultCount(nb.c_str()));
+
+            const long count =
+                new_dm.GetWordResultCount(nb.c_str());
+            for (long i = 0; i < count; ++i) {
+                long ox = -9, oy = -9;
+                long nx = -9, ny = -9;
+                eq_num(
+                    "GetWordsNoDict-pos-ret",
+                    old_dm.GetWordResultPos(
+                        oa.c_str(), i, &ox, &oy),
+                    new_dm.GetWordResultPos(
+                        nb.c_str(), i, &nx, &ny));
+                eq_num(
+                    "GetWordsNoDict-pos-x",
+                    ox, nx);
+                eq_num(
+                    "GetWordsNoDict-pos-y",
+                    oy, ny);
+
+                const char *os =
+                    old_dm.GetWordResultStr(
+                        oa.c_str(), i);
+                const std::string ovs =
+                    os ? os : "<null>";
+                const char *ns =
+                    new_dm.GetWordResultStr(
+                        nb.c_str(), i);
+                const std::string nvs =
+                    ns ? ns : "<null>";
+                eq_str(
+                    "GetWordsNoDict-str",
+                    ovs, nvs);
+            }
+        }
+
         old_dm.SetWordGap(5);
         new_dm.SetWordGap(5);
         {
