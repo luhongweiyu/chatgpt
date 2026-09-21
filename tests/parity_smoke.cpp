@@ -2923,6 +2923,37 @@ void test_ocr_core(
                 "FFFFFFFF8$A$0.0.33$11");
         }
 
+        old_dm.SetWordGap(5);
+        new_dm.SetWordGap(5);
+        {
+            const char *a = old_dm.GetWords(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.GetWords(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+            const std::string nb = b ? b : "<null>";
+            eq_str("GetWords-gap5", oa, nb);
+        }
+
+        old_dm.SetWordGap(10);
+        new_dm.SetWordGap(10);
+        {
+            const char *a = old_dm.GetWords(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.GetWords(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+            const std::string nb = b ? b : "<null>";
+            eq_str("GetWords-gap10", oa, nb);
+        }
+        old_dm.SetWordGap(5);
+        new_dm.SetWordGap(5);
+
+
         const char *oa =
             old_dm.Ocr(
                 0, 0, 79, 39,
