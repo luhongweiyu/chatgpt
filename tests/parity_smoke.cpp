@@ -3036,6 +3036,28 @@ void test_ocr_core(
             "OcrEx-controlled",
             old_ex, new_ex);
 
+
+        {
+            const char *a =
+                old_dm.OcrExOne(
+                    0, 0, 79, 39,
+                    "000000-000000", 1.0);
+            const std::string oa =
+                a ? a : "<null>";
+            const char *b =
+                new_dm.OcrExOne(
+                    0, 0, 79, 39,
+                    "000000-000000", 1.0);
+            const std::string nb =
+                b ? b : "<null>";
+            eq_str(
+                "OcrExOne-controlled",
+                oa, nb);
+            eq_str(
+                "OcrExOne-controlled-new-format",
+                nb, "A,10,10");
+        }
+
         long ox = 777, oy = 888;
         long nx = 777, ny = 888;
         const long old_find =
