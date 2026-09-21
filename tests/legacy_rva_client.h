@@ -371,6 +371,8 @@ public:
     long ClearDict(long index) { using F=long(WINAPI*)(long,long); return at<F>(115280)(obj_,index); }
     long GetDictCount(long index) { using F=long(WINAPI*)(long,long); return at<F>(117328)(obj_,index); }
 
+    const char *GetMac() { using F=PCSTR(WINAPI*)(long); return at<F>(122256)(obj_); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
