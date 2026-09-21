@@ -2735,6 +2735,50 @@ void test_binding_options(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     ::UnregisterClassA(cls, wc.hInstance);
 }
 
+
+void test_real_input_options(
+    LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    for (long en : {-1L, 0L, 1L, 2L}) {
+        eq_num(
+            ("EnableRealKeypad-" + std::to_string(en)).c_str(),
+            old_dm.EnableRealKeypad(en),
+            new_dm.EnableRealKeypad(en));
+    }
+    old_dm.EnableRealKeypad(0);
+    new_dm.EnableRealKeypad(0);
+
+    const struct MouseCase {
+        long en;
+        long delay;
+        long step;
+    } cases[] = {
+        {-1, 20, 30},
+        {0, 0, 0},
+        {0, -1, -1},
+        {1, 0, 30},
+        {1, 20, 0},
+        {1, 20, 30},
+        {2, 20, 30},
+        {3, 20, 30},
+        {4, 20, 30},
+        {5, 20, 30},
+    };
+
+    for (const auto &tc : cases) {
+        eq_num(
+            ("EnableRealMouse-" +
+             std::to_string(tc.en) + "-" +
+             std::to_string(tc.delay) + "-" +
+             std::to_string(tc.step)).c_str(),
+            old_dm.EnableRealMouse(
+                tc.en, tc.delay, tc.step),
+            new_dm.EnableRealMouse(
+                tc.en, tc.delay, tc.step));
+    }
+    old_dm.EnableRealMouse(0, 0, 0);
+    new_dm.EnableRealMouse(0, 0, 0);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
