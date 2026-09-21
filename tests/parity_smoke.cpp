@@ -2903,6 +2903,26 @@ void test_ocr_core(
         old_bind, new_bind);
 
     if (old_bind && new_bind) {
+        {
+            const char *a = old_dm.FetchWord(
+                10, 10, 12, 20,
+                "000000-000000", "A");
+            const std::string old_word =
+                a ? a : "<null>";
+            const char *b = new_dm.FetchWord(
+                10, 10, 12, 20,
+                "000000-000000", "A");
+            const std::string new_word =
+                b ? b : "<null>";
+            eq_str(
+                "FetchWord-controlled",
+                old_word, new_word);
+            eq_str(
+                "FetchWord-controlled-new-format",
+                new_word,
+                "FFFFFFFF8$A$0.0.33$11");
+        }
+
         const char *oa =
             old_dm.Ocr(
                 0, 0, 79, 39,
