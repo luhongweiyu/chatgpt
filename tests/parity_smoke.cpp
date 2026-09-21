@@ -2290,6 +2290,89 @@ void test_screen_buffers(LegacyRvaClient &old_dm, dmsoft &new_dm) {
            new_dm.FreeScreenData(new_bmp));
 }
 
+
+void test_cpu_cursor_display_state(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    eq_num("GetCpuType", old_dm.GetCpuType(), new_dm.GetCpuType());
+
+    {
+        const char *a = old_dm.GetCursorSpot();
+        const std::string old_spot = a ? a : "<null>";
+        const char *b = new_dm.GetCursorSpot();
+        const std::string new_spot = b ? b : "<null>";
+        eq_str("GetCursorSpot", old_spot, new_spot);
+    }
+
+    for (long en : {-1L, 0L, 1L, 2L}) {
+        eq_num(
+            ("SpeedNormalGraphic-" + std::to_string(en)).c_str(),
+            old_dm.SpeedNormalGraphic(en),
+            new_dm.SpeedNormalGraphic(en));
+    }
+
+    eq_num(
+        "LockDisplay-unbound-lock",
+        old_dm.LockDisplay(1),
+        new_dm.LockDisplay(1));
+    eq_num(
+        "LockDisplay-unbound-unlock",
+        old_dm.LockDisplay(0),
+        new_dm.LockDisplay(0));
+
+    const char *cls = "hcbyj_display_state_window";
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = ParityWndProc;
+    wc.hInstance = ::GetModuleHandleA(nullptr);
+    wc.lpszClassName = cls;
+    ::RegisterClassA(&wc);
+
+    HWND hwnd = ::CreateWindowExA(
+        0, cls, "display-state", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        80, 90, 240, 180, nullptr, nullptr, wc.hInstance, nullptr);
+    if (!hwnd) {
+        fail("display-state-window", "created", "failed");
+        return;
+    }
+    ::ShowWindow(hwnd, SW_SHOW);
+    ::UpdateWindow(hwnd);
+    ::Sleep(50);
+
+    const long h = static_cast<long>(reinterpret_cast<INT_PTR>(hwnd));
+
+    const long old_bind =
+        old_dm.BindWindow(h, "gdi", "normal", "normal", 0);
+    const long new_bind =
+        new_dm.BindWindow(h, "gdi", "normal", "normal", 0);
+    eq_num("display-state-BindWindow", old_bind, new_bind);
+
+    if (old_bind && new_bind) {
+        eq_num(
+            "LockDisplay-bound-lock",
+            old_dm.LockDisplay(1),
+            new_dm.LockDisplay(1));
+        eq_num(
+            "LockDisplay-bound-unlock",
+            old_dm.LockDisplay(0),
+            new_dm.LockDisplay(0));
+
+        eq_num(
+            "IsDisplayDead-t0",
+            old_dm.IsDisplayDead(0, 0, 3, 3, 0),
+            new_dm.IsDisplayDead(0, 0, 3, 3, 0));
+
+        // A one-second stable region checks timeout behavior without touching
+        // any external window.
+        eq_num(
+            "IsDisplayDead-stable",
+            old_dm.IsDisplayDead(0, 0, 3, 3, 1),
+            new_dm.IsDisplayDead(0, 0, 3, 3, 1));
+    }
+
+    old_dm.UnBindWindow();
+    new_dm.UnBindWindow();
+    ::DestroyWindow(hwnd);
+    ::UnregisterClassA(cls, wc.hInstance);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2321,6 +2404,7 @@ int main(int argc, char **argv) {
         test_critical_and_password(legacy_path, old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
+        test_cpu_cursor_display_state(old_dm, new_dm);
         test_audio_aero(old_dm, new_dm);
         test_system_identity(old_dm, new_dm);
         test_env(old_dm, new_dm);
