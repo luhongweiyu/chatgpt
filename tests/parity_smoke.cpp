@@ -2490,6 +2490,15 @@ void test_dictionary_core(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     std::filesystem::remove(input, ec);
 }
 
+
+void test_mac_address(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const char *a = old_dm.GetMac();
+    const std::string old_mac = a ? a : "<null>";
+    const char *b = new_dm.GetMac();
+    const std::string new_mac = b ? b : "<null>";
+    eq_str("GetMac", old_mac, new_mac);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2525,6 +2534,7 @@ int main(int argc, char **argv) {
         test_cpu_cursor_display_state(old_dm, new_dm);
         test_audio_aero(old_dm, new_dm);
         test_system_identity(old_dm, new_dm);
+        test_mac_address(old_dm, new_dm);
         test_env(old_dm, new_dm);
         test_file_ini(old_dm, new_dm);
         test_memory(old_dm, new_dm);
