@@ -227,9 +227,9 @@ bool ReadLegacyDictFileCompat(
         out.clear();
         return false;
     }
-    const std::string bytes(
+    const std::string bytes{
         std::istreambuf_iterator<char>(in),
-        std::istreambuf_iterator<char>());
+        std::istreambuf_iterator<char>()};
     return LoadLegacyDictTextCompat(bytes.data(), bytes.size(), out);
 }
 
