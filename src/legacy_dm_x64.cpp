@@ -3600,6 +3600,221 @@ std::string EncodeLegacyWordCompat(
            "$" + std::to_string(height);
 }
 
+
+bool RenderSystemGlyphCompat(
+    wchar_t ch,
+    PCSTR font_name,
+    long font_size,
+    long flag,
+    LegacyDictEntryCompat &out) {
+    out = {};
+    if (ch == L'\0' || ch == L'|' ||
+        !font_name || !*font_name ||
+        font_size <= 0 || font_size > 255 ||
+        flag < 0 || (flag & ~15L) != 0)
+        return false;
+
+    std::wstring face = AcpToWideCompat(font_name);
+    if (!face.empty() && face.back() == L'\0')
+        face.pop_back();
+    if (face.empty())
+        return false;
+
+    const int canvas_w =
+        static_cast<int>((std::max)(64L, font_size * 4L));
+    const int canvas_h =
+        static_cast<int>((std::max)(64L, font_size * 3L));
+    const int pad =
+        static_cast<int>((std::max)(4L, font_size / 2L));
+
+    HDC dc = ::CreateCompatibleDC(nullptr);
+    if (!dc) return false;
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize =
+        sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = canvas_w;
+    bmi.bmiHeader.biHeight = -canvas_h;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void *dib_bits = nullptr;
+    HBITMAP bitmap = ::CreateDIBSection(
+        dc, &bmi, DIB_RGB_COLORS,
+        &dib_bits, nullptr, 0);
+    if (!bitmap || !dib_bits) {
+        if (bitmap) ::DeleteObject(bitmap);
+        ::DeleteDC(dc);
+        return false;
+    }
+
+    HFONT font = ::CreateFontW(
+        -static_cast<int>(font_size),
+        0, 0, 0,
+        (flag & 1) ? FW_BOLD : FW_NORMAL,
+        (flag & 2) ? TRUE : FALSE,
+        (flag & 4) ? TRUE : FALSE,
+        (flag & 8) ? TRUE : FALSE,
+        DEFAULT_CHARSET,
+        OUT_TT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        NONANTIALIASED_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        face.c_str());
+    if (!font) {
+        ::DeleteObject(bitmap);
+        ::DeleteDC(dc);
+        return false;
+    }
+
+    HGDIOBJ old_bitmap =
+        ::SelectObject(dc, bitmap);
+    HGDIOBJ old_font =
+        ::SelectObject(dc, font);
+
+    RECT clear{0, 0, canvas_w, canvas_h};
+    HBRUSH black =
+        reinterpret_cast<HBRUSH>(
+            ::GetStockObject(BLACK_BRUSH));
+    ::FillRect(dc, &clear, black);
+    ::SetBkMode(dc, OPAQUE);
+    ::SetBkColor(dc, RGB(0, 0, 0));
+    ::SetTextColor(dc, RGB(255, 255, 255));
+    ::SetTextAlign(dc, TA_LEFT | TA_TOP);
+    ::TextOutW(dc, pad, pad, &ch, 1);
+    ::GdiFlush();
+
+    OcrBinaryCompat binary{};
+    binary.width = canvas_w;
+    binary.height = canvas_h;
+    binary.pixels.assign(
+        static_cast<size_t>(canvas_w) *
+        static_cast<size_t>(canvas_h), 0);
+
+    const auto *pixels =
+        static_cast<const unsigned char *>(dib_bits);
+    for (int y = 0; y < canvas_h; ++y) {
+        for (int x = 0; x < canvas_w; ++x) {
+            const size_t off =
+                (static_cast<size_t>(y) *
+                     static_cast<size_t>(canvas_w) +
+                 static_cast<size_t>(x)) * 4u;
+            const unsigned value =
+                static_cast<unsigned>(pixels[off + 0]) +
+                static_cast<unsigned>(pixels[off + 1]) +
+                static_cast<unsigned>(pixels[off + 2]);
+            if (value >= 3u * 128u) {
+                binary.pixels[
+                    static_cast<size_t>(y) *
+                        static_cast<size_t>(canvas_w) +
+                    static_cast<size_t>(x)] = 1;
+            }
+        }
+    }
+
+    std::string label =
+        WideToAcpCompat(&ch, 1);
+    const std::string raw =
+        EncodeLegacyWordCompat(
+            binary, label.c_str());
+
+    ::SelectObject(dc, old_font);
+    ::SelectObject(dc, old_bitmap);
+    ::DeleteObject(font);
+    ::DeleteObject(bitmap);
+    ::DeleteDC(dc);
+
+    if (raw.empty())
+        return false;
+    return ParseLegacyDictEntryCompat(
+        raw.c_str(), out);
+}
+
+bool BuildSystemFontDictCompat(
+    PCSTR text,
+    PCSTR font_name,
+    long font_size,
+    long flag,
+    std::vector<LegacyDictEntryCompat> &dict,
+    std::string *serialized = nullptr) {
+    dict.clear();
+    if (serialized) serialized->clear();
+    if (!text || !*text ||
+        !font_name || !*font_name)
+        return false;
+
+    std::wstring wide = AcpToWideCompat(text);
+    if (!wide.empty() && wide.back() == L'\0')
+        wide.pop_back();
+    if (wide.empty())
+        return false;
+
+    std::unordered_map<std::string, size_t> seen;
+    bool first_serialized = true;
+
+    for (wchar_t ch : wide) {
+        if (ch == L'|')
+            continue;
+
+        LegacyDictEntryCompat entry;
+        if (!RenderSystemGlyphCompat(
+                ch, font_name,
+                font_size, flag, entry))
+            return false;
+
+        if (serialized) {
+            if (!first_serialized)
+                serialized->push_back('|');
+            first_serialized = false;
+            *serialized += entry.raw;
+        }
+
+        const std::string key =
+            LegacyDictKeyCompat(entry);
+        const auto it = seen.find(key);
+        if (it == seen.end()) {
+            seen.emplace(key, dict.size());
+            dict.push_back(std::move(entry));
+        } else {
+            // Same shape may represent another character in the requested
+            // set. Keep the first stable mapping for deterministic matching.
+        }
+    }
+    return !dict.empty();
+}
+
+bool RecognizeOcrRegionWithDictCompat(
+    DmImpl *p,
+    long x1, long y1, long x2, long y2,
+    PCSTR color, double sim,
+    const std::vector<LegacyDictEntryCompat> &dict,
+    std::vector<OcrResultCompat> &results) {
+    results.clear();
+    if (!p || dict.empty() ||
+        x2 < x1 || y2 < y1 ||
+        !color || !*color)
+        return false;
+
+    ScreenImageCompat image;
+    if (!CaptureScreenRegionForObjectCompat(
+            p, x1, y1, x2, y2, image))
+        return false;
+
+    OcrBinaryCompat binary;
+    if (!BuildOcrBinaryCompat(
+            image, color, sim, binary))
+        return false;
+
+    RecognizeOcrCompat(
+        binary, dict, sim, results);
+    for (auto &item : results) {
+        item.x += x1;
+        item.y += y1;
+    }
+    return true;
+}
+
 std::string FetchLegacyWordRegionCompat(
     DmImpl *p,
     long x1, long y1, long x2, long y2,
@@ -10445,6 +10660,105 @@ const char *dmsoft::OcrInFile(
     RecognizeOcrCompat(
         binary, dict, sim, results);
     p->scratch = OcrTextCompat(results);
+    return p->scratch.c_str();
+}
+
+
+const char *dmsoft::GetDictInfo(
+    PCSTR str, PCSTR font_name,
+    long font_size, long flag) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    std::vector<LegacyDictEntryCompat> dict;
+    std::string serialized;
+    if (!BuildSystemFontDictCompat(
+            str, font_name,
+            font_size, flag,
+            dict, &serialized)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+    p->scratch = std::move(serialized);
+    return p->scratch.c_str();
+}
+
+long dmsoft::FindStrWithFont(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim,
+    PCSTR font_name, long font_size,
+    long flag, long *x, long *y) {
+    if (x) *x = -1;
+    if (y) *y = -1;
+    auto *p = P(impl);
+    if (!p || !str || !*str)
+        return -1;
+
+    std::vector<LegacyDictEntryCompat> dict;
+    if (!BuildSystemFontDictCompat(
+            str, font_name,
+            font_size, flag, dict))
+        return -1;
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionWithDictCompat(
+            p, x1, y1, x2, y2,
+            color, sim, dict, results))
+        return -1;
+
+    return FindStrFromOcrCompat(
+        results, str, x, y);
+}
+
+const char *dmsoft::FindStrWithFontE(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim,
+    PCSTR font_name, long font_size,
+    long flag) {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    long x = -1, y = -1;
+    const long id = FindStrWithFont(
+        x1, y1, x2, y2,
+        str, color, sim,
+        font_name, font_size, flag,
+        &x, &y);
+    p->scratch =
+        std::to_string(id) + "|" +
+        std::to_string(x) + "|" +
+        std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindStrWithFontEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim,
+    PCSTR font_name, long font_size,
+    long flag) {
+    auto *p = P(impl);
+    if (!p || !str || !*str)
+        return "";
+
+    std::vector<LegacyDictEntryCompat> dict;
+    if (!BuildSystemFontDictCompat(
+            str, font_name,
+            font_size, flag, dict)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::vector<OcrResultCompat> results;
+    if (!RecognizeOcrRegionWithDictCompat(
+            p, x1, y1, x2, y2,
+            color, sim, dict, results)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    p->scratch =
+        FindStrExFromOcrCompat(
+            results, str);
     return p->scratch.c_str();
 }
 
