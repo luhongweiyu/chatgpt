@@ -343,6 +343,11 @@ public:
     long FreeScreenData(long handle) { using F=long(WINAPI*)(long,long); return at<F>(111472)(obj_,handle); }
     long SetExcludeRegion(long type,PCSTR info) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(107248)(obj_,type,info); }
 
+    long FindInputMethod(PCSTR id) { using F=long(WINAPI*)(long,PCSTR); return at<F>(116192)(obj_,id); }
+    long CheckInputMethod(long hwnd,PCSTR id) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(120688)(obj_,hwnd,id); }
+    long ActiveInputMethod(long hwnd,PCSTR id) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(110176)(obj_,hwnd,id); }
+    long EnableIme(long en) { using F=long(WINAPI*)(long,long); return at<F>(104768)(obj_,en); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
