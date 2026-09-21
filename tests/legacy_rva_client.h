@@ -405,6 +405,8 @@ public:
 
     const char *GetWords(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(125440)(obj_,x1,y1,x2,y2,color,sim); }
 
+    const char *GetWordsNoDict(long x1,long y1,long x2,long y2,PCSTR color) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR); return at<F>(115920)(obj_,x1,y1,x2,y2,color); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
