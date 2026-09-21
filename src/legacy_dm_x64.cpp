@@ -9565,4 +9565,56 @@ const char *dmsoft::FindStrEx(
     return p->scratch.c_str();
 }
 
+
+long dmsoft::FindStrFast(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim,
+    long *x, long *y) {
+    // The recovered native OCR core already uses a prefix-sum binary scan,
+    // so the legacy "Fast" entry can share the same optimized path.
+    return FindStr(
+        x1, y1, x2, y2,
+        str, color, sim, x, y);
+}
+
+const char *dmsoft::FindStrFastEx(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim) {
+    return FindStrEx(
+        x1, y1, x2, y2,
+        str, color, sim);
+}
+
+const char *dmsoft::FindStrE(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    const long id = FindStr(
+        x1, y1, x2, y2,
+        str, color, sim, &x, &y);
+    p->scratch =
+        std::to_string(id) + "|" +
+        std::to_string(x) + "|" +
+        std::to_string(y);
+    return p->scratch.c_str();
+}
+
+const char *dmsoft::FindStrFastE(
+    long x1, long y1, long x2, long y2,
+    PCSTR str, PCSTR color, double sim) {
+    auto *p = P(impl);
+    if (!p) return "";
+    long x = -1, y = -1;
+    const long id = FindStrFast(
+        x1, y1, x2, y2,
+        str, color, sim, &x, &y);
+    p->scratch =
+        std::to_string(id) + "|" +
+        std::to_string(x) + "|" +
+        std::to_string(y);
+    return p->scratch.c_str();
+}
+
 #include "legacy_dm_generated.inc"
