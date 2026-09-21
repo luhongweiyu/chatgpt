@@ -290,6 +290,10 @@ struct DmImpl {
     long mouse_sync_timeout = 0;
     bool fake_active_enabled = false;
     bool speed_dx_enabled = false;
+    bool real_keypad_enabled = false;
+    long real_mouse_mode = 0;
+    long real_mouse_delay = 20;
+    long real_mouse_step = 30;
     bool exit_thread_enabled = false;
     DWORD exit_thread_owner = 0;
     long native_error = 0;
@@ -1651,6 +1655,95 @@ BindingSnapshotCompat BindingSnapshotForObjectCompat(DmImpl *p) {
     return out;
 }
 
+
+long RandomizedHumanDelayCompat(long base) {
+    base = (std::max)(0L, base);
+    if (base == 0) return 0;
+    const long low = (std::max)(0L, base / 2);
+    const long high = base + base / 2;
+    static thread_local std::mt19937 rng{
+        std::random_device{}()};
+    return std::uniform_int_distribution<long>(
+        low, high)(rng);
+}
+
+long MoveMouseTrajectoryCompat(
+    DmImpl *p, long screen_x, long screen_y) {
+    if (!p) return 0;
+
+    long mode = 0;
+    long delay = 0;
+    long step = 0;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        mode = p->real_mouse_mode;
+        delay = p->real_mouse_delay;
+        step = p->real_mouse_step;
+    }
+    if (mode == 0)
+        return MoveMouseAbsoluteCompat(screen_x, screen_y);
+    if (mode < 1 || mode > 4 ||
+        delay <= 0 || step <= 0)
+        return 0;
+
+    POINT start{};
+    if (!::GetCursorPos(&start))
+        return MoveMouseAbsoluteCompat(screen_x, screen_y);
+
+    const long dx = screen_x - start.x;
+    const long dy = screen_y - start.y;
+    const double distance =
+        std::sqrt(
+            static_cast<double>(dx) * dx +
+            static_cast<double>(dy) * dy);
+    const long segments =
+        (std::max)(
+            1L,
+            static_cast<long>(
+                std::ceil(distance / step)));
+
+    static thread_local std::mt19937 rng{
+        std::random_device{}()};
+    std::uniform_real_distribution<double> unit(-1.0, 1.0);
+
+    for (long i = 1; i <= segments; ++i) {
+        const double t =
+            static_cast<double>(i) /
+            static_cast<double>(segments);
+        double curve_x = 0.0;
+        double curve_y = 0.0;
+
+        if (mode >= 2 && i != segments) {
+            const double amplitude =
+                mode == 2 ? (std::min)(20.0, distance * 0.08) :
+                mode == 3 ? (std::min)(35.0, distance * 0.12) :
+                            (std::min)(60.0, distance * 0.20);
+            const double arc =
+                std::sin(3.14159265358979323846 * t);
+            const double len =
+                (std::max)(1.0, distance);
+            const double nx = -dy / len;
+            const double ny = dx / len;
+            const double sign =
+                mode == 2 ? unit(rng) :
+                (unit(rng) < 0 ? -1.0 : 1.0);
+            curve_x = nx * amplitude * arc * sign;
+            curve_y = ny * amplitude * arc * sign;
+        }
+
+        const long x = static_cast<long>(
+            std::llround(start.x + dx * t + curve_x));
+        const long y = static_cast<long>(
+            std::llround(start.y + dy * t + curve_y));
+
+        if (!MoveMouseAbsoluteCompat(x, y))
+            return 0;
+        if (i != segments)
+            ::Sleep(static_cast<DWORD>(delay));
+    }
+    return 1;
+}
+
 bool BoundInputEnabledCompat(const BindingSnapshotCompat &b) {
     return b.hwnd && ::IsWindow(b.hwnd) &&
            (b.enable == 1 || b.enable == -1);
@@ -1745,9 +1838,9 @@ long MoveMouseForObjectCompat(DmImpl *p, long x, long y) {
             static_cast<LONG>(y)
         };
         if (!::ClientToScreen(b.hwnd, &screen)) return 0;
-        return MoveMouseAbsoluteCompat(screen.x, screen.y);
+        return MoveMouseTrajectoryCompat(p, screen.x, screen.y);
     }
-    return MoveMouseAbsoluteCompat(x, y);
+    return MoveMouseTrajectoryCompat(p, x, y);
 }
 
 long MoveMouseRelativeForObjectCompat(DmImpl *p, long rx, long ry) {
@@ -5978,12 +6071,17 @@ long dmsoft::KeyPress(long vk) {
     if (!p) return 0;
     if (!SendKeyboardVkForObjectCompat(p, vk, false)) return 0;
     const auto b = BindingSnapshotForObjectCompat(p);
-    const long delay =
+    long delay =
         BoundInputEnabledCompat(b) &&
         _stricmp(b.keypad.c_str(), "windows") == 0
             ? p->keypad_delay_windows
             : p->keypad_delay_normal;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, delay)));
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        if (p->real_keypad_enabled)
+            delay = RandomizedHumanDelayCompat(delay);
+    }
+    ::Sleep(static_cast<DWORD>((std::max)(0L, delay)));
     return SendKeyboardVkForObjectCompat(p, vk, true);
 }
 
@@ -6023,14 +6121,29 @@ long dmsoft::MiddleUp() {
         MOUSEEVENTF_MIDDLEUP, 0);
 }
 
+
+long MouseClickDelayForObjectCompat(DmImpl *p) {
+    if (!p) return 0;
+    const auto b = BindingSnapshotForObjectCompat(p);
+    long delay =
+        BoundInputEnabledCompat(b) &&
+        (_stricmp(b.mouse.c_str(), "windows") == 0 ||
+         _stricmp(b.mouse.c_str(), "windows3") == 0)
+            ? p->mouse_delay_windows
+            : p->mouse_delay_normal;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        if (p->real_mouse_mode != 0)
+            delay = RandomizedHumanDelayCompat(delay);
+    }
+    return (std::max)(0L, delay);
+}
+
 long dmsoft::LeftClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!LeftDown()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
-          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
-           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
-              ? p->mouse_delay_windows : p->mouse_delay_normal))));
+    ::Sleep(static_cast<DWORD>(MouseClickDelayForObjectCompat(p)));
     return LeftUp();
 }
 
@@ -6038,10 +6151,7 @@ long dmsoft::RightClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!RightDown()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
-          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
-           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
-              ? p->mouse_delay_windows : p->mouse_delay_normal))));
+    ::Sleep(static_cast<DWORD>(MouseClickDelayForObjectCompat(p)));
     return RightUp();
 }
 
@@ -6049,10 +6159,7 @@ long dmsoft::MiddleClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!MiddleDown()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
-          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
-           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
-              ? p->mouse_delay_windows : p->mouse_delay_normal))));
+    ::Sleep(static_cast<DWORD>(MouseClickDelayForObjectCompat(p)));
     return MiddleUp();
 }
 
@@ -6060,10 +6167,7 @@ long dmsoft::LeftDoubleClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!LeftClick()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
-          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
-           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
-              ? p->mouse_delay_windows : p->mouse_delay_normal))));
+    ::Sleep(static_cast<DWORD>(MouseClickDelayForObjectCompat(p)));
     return LeftClick();
 }
 
@@ -8581,6 +8685,32 @@ long dmsoft::SetExitThread(long en) {
     std::lock_guard<std::mutex> lock(p->state_mutex);
     p->exit_thread_enabled = en != 0;
     p->exit_thread_owner = en ? ::GetCurrentThreadId() : 0;
+    return 1;
+}
+
+
+long dmsoft::EnableRealKeypad(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->real_keypad_enabled = en != 0;
+    return 1;
+}
+
+long dmsoft::EnableRealMouse(
+    long en, long mousedelay, long mousestep) {
+    auto *p = P(impl);
+    if (!p || en < 0 || en > 4) return 0;
+    if (en != 0 &&
+        (mousedelay <= 0 || mousestep <= 0))
+        return 0;
+
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->real_mouse_mode = en;
+    if (en != 0) {
+        p->real_mouse_delay = mousedelay;
+        p->real_mouse_step = mousestep;
+    }
     return 1;
 }
 
