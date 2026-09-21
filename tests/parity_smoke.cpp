@@ -3132,6 +3132,67 @@ void test_ocr_core(
             const std::string nb = b ? b : "<null>";
             eq_str("FindStrFastE-controlled", oa, nb);
         }
+
+
+        {
+            long ox = -9, oy = -9;
+            long nx = -9, ny = -9;
+            const char *a = old_dm.FindStrS(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0,
+                &ox, &oy);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.FindStrS(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0,
+                &nx, &ny);
+            const std::string nb = b ? b : "<null>";
+            eq_str("FindStrS-controlled", oa, nb);
+            eq_num("FindStrS-controlled-x", ox, nx);
+            eq_num("FindStrS-controlled-y", oy, ny);
+        }
+
+        {
+            long ox = -9, oy = -9;
+            long nx = -9, ny = -9;
+            const char *a = old_dm.FindStrFastS(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0,
+                &ox, &oy);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.FindStrFastS(
+                0, 0, 79, 39, "AA|A",
+                "000000-000000", 1.0,
+                &nx, &ny);
+            const std::string nb = b ? b : "<null>";
+            eq_str("FindStrFastS-controlled", oa, nb);
+            eq_num("FindStrFastS-controlled-x", ox, nx);
+            eq_num("FindStrFastS-controlled-y", oy, ny);
+        }
+
+        {
+            const char *a = old_dm.FindStrExS(
+                0, 0, 79, 39, "A|AA",
+                "000000-000000", 1.0);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.FindStrExS(
+                0, 0, 79, 39, "A|AA",
+                "000000-000000", 1.0);
+            const std::string nb = b ? b : "<null>";
+            eq_str("FindStrExS-controlled", oa, nb);
+        }
+
+        {
+            const char *a = old_dm.FindStrFastExS(
+                0, 0, 79, 39, "A|AA",
+                "000000-000000", 1.0);
+            const std::string oa = a ? a : "<null>";
+            const char *b = new_dm.FindStrFastExS(
+                0, 0, 79, 39, "A|AA",
+                "000000-000000", 1.0);
+            const std::string nb = b ? b : "<null>";
+            eq_str("FindStrFastExS-controlled", oa, nb);
+        }
     }
 
     old_dm.UnBindWindow();
