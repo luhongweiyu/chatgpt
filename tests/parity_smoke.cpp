@@ -178,6 +178,67 @@ bool write_test_bmp24(
     return out.good();
 }
 
+
+bool write_ocr_bmp24(
+    const std::filesystem::path &path) {
+    constexpr long width = 40;
+    constexpr long height = 30;
+    const DWORD row_bytes =
+        static_cast<DWORD>(
+            ((static_cast<unsigned long long>(width) * 3ULL + 3ULL) / 4ULL) * 4ULL);
+    const DWORD pixel_bytes =
+        row_bytes * static_cast<DWORD>(height);
+
+    BITMAPFILEHEADER fh{};
+    BITMAPINFOHEADER ih{};
+    fh.bfType = 0x4D42;
+    fh.bfOffBits = sizeof(fh) + sizeof(ih);
+    fh.bfSize = fh.bfOffBits + pixel_bytes;
+
+    ih.biSize = sizeof(ih);
+    ih.biWidth = width;
+    ih.biHeight = height;
+    ih.biPlanes = 1;
+    ih.biBitCount = 24;
+    ih.biCompression = BI_RGB;
+    ih.biSizeImage = pixel_bytes;
+
+    std::ofstream out(
+        path,
+        std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+
+    out.write(
+        reinterpret_cast<const char *>(&fh),
+        sizeof(fh));
+    out.write(
+        reinterpret_cast<const char *>(&ih),
+        sizeof(ih));
+
+    std::vector<unsigned char> row(
+        row_bytes, 0xFF);
+    for (long file_y = 0;
+         file_y < height; ++file_y) {
+        std::fill(row.begin(), row.end(), 0xFF);
+        const long y =
+            height - 1 - file_y;
+        for (long x = 0; x < width; ++x) {
+            const bool black =
+                ((x >= 10 && x <= 12) ||
+                 (x >= 20 && x <= 22)) &&
+                y >= 10 && y <= 20;
+            if (!black) continue;
+            row[static_cast<size_t>(x) * 3 + 0] = 0;
+            row[static_cast<size_t>(x) * 3 + 1] = 0;
+            row[static_cast<size_t>(x) * 3 + 2] = 0;
+        }
+        out.write(
+            reinterpret_cast<const char *>(row.data()),
+            row.size());
+    }
+    return out.good();
+}
+
 bool write_silent_wav(const std::filesystem::path &path) {
     constexpr unsigned sample_rate = 8000;
     constexpr unsigned data_size = 800; // 100 ms, mono, unsigned 8-bit PCM
@@ -2973,6 +3034,37 @@ void test_ocr_core(
             }
         }
 
+        {
+            const auto ocr_bmp =
+                root / "ocr_core.bmp";
+            if (!write_ocr_bmp24(ocr_bmp)) {
+                fail(
+                    "OcrInFile-fixture",
+                    "created", "failed");
+            } else {
+                const char *a =
+                    old_dm.OcrInFile(
+                        0, 0, 39, 29,
+                        ocr_bmp.string().c_str(),
+                        "000000-000000", 1.0);
+                const std::string oa =
+                    a ? a : "<null>";
+                const char *b =
+                    new_dm.OcrInFile(
+                        0, 0, 39, 29,
+                        ocr_bmp.string().c_str(),
+                        "000000-000000", 1.0);
+                const std::string nb =
+                    b ? b : "<null>";
+                eq_str(
+                    "OcrInFile-controlled",
+                    oa, nb);
+                eq_str(
+                    "OcrInFile-controlled-new",
+                    nb, "AA");
+            }
+        }
+
         old_dm.SetWordGap(5);
         new_dm.SetWordGap(5);
         {
@@ -3227,6 +3319,7 @@ void test_ocr_core(
 
     std::error_code ec;
     std::filesystem::remove(dict_file, ec);
+    std::filesystem::remove(root / "ocr_core.bmp", ec);
 }
 
 } // namespace
