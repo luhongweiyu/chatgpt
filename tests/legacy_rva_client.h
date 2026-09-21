@@ -373,6 +373,10 @@ public:
 
     const char *GetMac() { using F=PCSTR(WINAPI*)(long); return at<F>(122256)(obj_); }
 
+    const char *GetNetTimeByIp(PCSTR ip) { using F=PCSTR(WINAPI*)(long,PCSTR); return at<F>(113616)(obj_,ip); }
+    const char *GetNetTime() { using F=PCSTR(WINAPI*)(long); return at<F>(106416)(obj_); }
+    const char *GetNetTimeSafe() { using F=PCSTR(WINAPI*)(long); return at<F>(125584)(obj_); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
