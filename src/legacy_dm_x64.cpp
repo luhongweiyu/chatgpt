@@ -118,6 +118,57 @@ std::string LegacyDictKeyCompat(const LegacyDictEntryCompat &entry) {
     return entry.bitmap + "$" + std::to_string(entry.height);
 }
 
+
+bool CopyReadableLocalMemoryCompat(
+    ULONG_PTR address, size_t size, std::string &out) {
+    out.clear();
+    if (!address || size == 0) return false;
+
+    out.resize(size);
+    size_t copied = 0;
+    while (copied < size) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        const ULONG_PTR current = address + copied;
+        if (!::VirtualQuery(
+                reinterpret_cast<LPCVOID>(current),
+                &mbi, sizeof(mbi))) {
+            out.clear();
+            return false;
+        }
+
+        const DWORD protect = mbi.Protect & 0xFF;
+        const bool readable =
+            mbi.State == MEM_COMMIT &&
+            !(mbi.Protect & PAGE_GUARD) &&
+            protect != PAGE_NOACCESS &&
+            protect != 0;
+        if (!readable) {
+            out.clear();
+            return false;
+        }
+
+        const ULONG_PTR region_begin =
+            reinterpret_cast<ULONG_PTR>(mbi.BaseAddress);
+        const ULONG_PTR region_end =
+            region_begin + mbi.RegionSize;
+        if (current < region_begin || current >= region_end) {
+            out.clear();
+            return false;
+        }
+
+        const size_t available = static_cast<size_t>(
+            region_end - current);
+        const size_t chunk =
+            (std::min)(available, size - copied);
+        std::memcpy(
+            out.data() + copied,
+            reinterpret_cast<const void *>(current),
+            chunk);
+        copied += chunk;
+    }
+    return true;
+}
+
 bool LoadLegacyDictTextCompat(
     const char *data, size_t size,
     std::vector<LegacyDictEntryCompat> &out) {
@@ -8113,18 +8164,18 @@ long dmsoft::SetDictMem(long index, long addr, long size) {
         addr == 0 || size <= 0)
         return 0;
 
-    const char *data = reinterpret_cast<const char *>(
+    const ULONG_PTR address =
         static_cast<ULONG_PTR>(
-            static_cast<unsigned long>(addr)));
+            static_cast<unsigned long>(addr));
+    std::string bytes;
+    if (!CopyReadableLocalMemoryCompat(
+            address, static_cast<size_t>(size), bytes))
+        return 0;
 
     std::vector<LegacyDictEntryCompat> entries;
-    __try {
-        if (!LoadLegacyDictTextCompat(
-                data, static_cast<size_t>(size), entries))
-            return 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    if (!LoadLegacyDictTextCompat(
+            bytes.data(), bytes.size(), entries))
         return 0;
-    }
 
     std::lock_guard<std::mutex> lock(p->state_mutex);
     p->dictionaries[static_cast<size_t>(index)] =
