@@ -377,6 +377,15 @@ public:
     const char *GetNetTime() { using F=PCSTR(WINAPI*)(long); return at<F>(106416)(obj_); }
     const char *GetNetTimeSafe() { using F=PCSTR(WINAPI*)(long); return at<F>(125584)(obj_); }
 
+    long EnableMouseMsg(long en) { using F=long(WINAPI*)(long,long); return at<F>(106976)(obj_,en); }
+    long EnableKeypadMsg(long en) { using F=long(WINAPI*)(long,long); return at<F>(109136)(obj_,en); }
+    long EnableKeypadSync(long en,long timeout) { using F=long(WINAPI*)(long,long,long); return at<F>(107072)(obj_,en,timeout); }
+    long EnableMouseSync(long en,long timeout) { using F=long(WINAPI*)(long,long,long); return at<F>(116320)(obj_,en,timeout); }
+    long EnableKeypadPatch(long en) { using F=long(WINAPI*)(long,long); return at<F>(125216)(obj_,en); }
+    long EnableFakeActive(long en) { using F=long(WINAPI*)(long,long); return at<F>(104016)(obj_,en); }
+    long EnableSpeedDx(long en) { using F=long(WINAPI*)(long,long); return at<F>(118512)(obj_,en); }
+    long SetExitThread(long en) { using F=long(WINAPI*)(long,long); return at<F>(107760)(obj_,en); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
