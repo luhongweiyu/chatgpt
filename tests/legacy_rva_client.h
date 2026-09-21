@@ -414,6 +414,8 @@ public:
 
     const char *OcrExOne(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(123184)(obj_,x1,y1,x2,y2,color,sim); }
 
+    const char *OcrInFile(long x1,long y1,long x2,long y2,PCSTR pic_name,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(125824)(obj_,x1,y1,x2,y2,pic_name,color,sim); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
