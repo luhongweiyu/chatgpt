@@ -58,6 +58,15 @@ struct ExcludeRegionCompat {
 struct DmImpl {
     hcbyj64::OpObject op;
     bool hwnd_is_pid = false;
+    HWND bound_hwnd = nullptr;
+    std::string bind_display = "normal";
+    std::string bind_mouse = "normal";
+    std::string bind_keypad = "normal";
+    std::string bind_public;
+    long bind_mode = 0;
+    long bind_enable = 1;
+    long virtual_mouse_x = 0;
+    long virtual_mouse_y = 0;
     long native_error = 0;
     std::string scratch;
     std::map<std::pair<long, std::string>, std::string> env;
@@ -118,6 +127,50 @@ std::atomic<long> g_next_dm_id{1};
 std::atomic<long> g_dm_object_count{0};
 std::mutex g_cri_mutex;
 DmImpl *g_cri_owner = nullptr;
+std::mutex g_bind_mutex;
+std::unordered_map<ULONG_PTR, long> g_bound_window_counts;
+
+void RegisterBoundWindowCompat(HWND hwnd) {
+    if (!hwnd) return;
+    std::lock_guard<std::mutex> lock(g_bind_mutex);
+    ++g_bound_window_counts[reinterpret_cast<ULONG_PTR>(hwnd)];
+}
+
+void UnregisterBoundWindowCompat(HWND hwnd) {
+    if (!hwnd) return;
+    std::lock_guard<std::mutex> lock(g_bind_mutex);
+    const ULONG_PTR key = reinterpret_cast<ULONG_PTR>(hwnd);
+    const auto it = g_bound_window_counts.find(key);
+    if (it == g_bound_window_counts.end()) return;
+    if (--it->second <= 0) g_bound_window_counts.erase(it);
+}
+
+bool IsWindowBoundCompat(HWND hwnd) {
+    if (!hwnd) return false;
+    std::lock_guard<std::mutex> lock(g_bind_mutex);
+    const auto it =
+        g_bound_window_counts.find(reinterpret_cast<ULONG_PTR>(hwnd));
+    return it != g_bound_window_counts.end() && it->second > 0;
+}
+
+void ClearObjectBindingCompat(DmImpl *p) {
+    if (!p) return;
+    HWND old = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        old = p->bound_hwnd;
+        p->bound_hwnd = nullptr;
+        p->bind_display = "normal";
+        p->bind_mouse = "normal";
+        p->bind_keypad = "normal";
+        p->bind_public.clear();
+        p->bind_mode = 0;
+        p->bind_enable = 1;
+        p->virtual_mouse_x = 0;
+        p->virtual_mouse_y = 0;
+    }
+    UnregisterBoundWindowCompat(old);
+}
 
 std::string ModuleDirectoryCompat(bool current_dll) {
     HMODULE module = nullptr;
@@ -1738,9 +1791,158 @@ bool CaptureScreenRegionCompat(long x1, long y1, long x2, long y2, ScreenImageCo
 }
 
 
+
+bool CaptureBoundClientRegionCompat(
+    HWND hwnd, const std::string &display,
+    long x1, long y1, long x2, long y2,
+    ScreenImageCompat &out) {
+    out = {};
+    if (!hwnd || !::IsWindow(hwnd) ||
+        x2 < x1 || y2 < y1)
+        return false;
+
+    RECT client{};
+    if (!::GetClientRect(hwnd, &client)) return false;
+    const long client_w = client.right - client.left;
+    const long client_h = client.bottom - client.top;
+    if (client_w <= 0 || client_h <= 0) return false;
+
+    if (_stricmp(display.c_str(), "normal") == 0) {
+        POINT origin{0,0};
+        if (!::ClientToScreen(hwnd, &origin)) return false;
+        if (!CaptureScreenRegionCompat(
+                origin.x + x1, origin.y + y1,
+                origin.x + x2, origin.y + y2, out))
+            return false;
+        out.x = x1;
+        out.y = y1;
+        return true;
+    }
+
+    if (_stricmp(display.c_str(), "gdi") != 0 &&
+        _stricmp(display.c_str(), "gdi2") != 0)
+        return false;
+
+    const long width = x2 - x1 + 1;
+    const long height = y2 - y1 + 1;
+    if (width <= 0 || height <= 0) return false;
+
+    HDC source = ::GetDC(hwnd);
+    if (!source) return false;
+    HDC memory = ::CreateCompatibleDC(source);
+    if (!memory) {
+        ::ReleaseDC(hwnd, source);
+        return false;
+    }
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void *bits = nullptr;
+    HBITMAP bitmap = ::CreateDIBSection(
+        source, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap || !bits) {
+        if (bitmap) ::DeleteObject(bitmap);
+        ::DeleteDC(memory);
+        ::ReleaseDC(hwnd, source);
+        return false;
+    }
+    HGDIOBJ old = ::SelectObject(memory, bitmap);
+
+    BOOL copied = FALSE;
+    if (_stricmp(display.c_str(), "gdi") == 0) {
+        copied = ::BitBlt(
+            memory, 0, 0, width, height,
+            source, x1, y1, SRCCOPY | CAPTUREBLT);
+    } else {
+        // gdi2 favors PrintWindow for windows that do not repaint their DC
+        // while covered. Render the full client and crop with a temporary DC.
+        HDC full_dc = ::CreateCompatibleDC(source);
+        BITMAPINFO full_bmi{};
+        full_bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        full_bmi.bmiHeader.biWidth = client_w;
+        full_bmi.bmiHeader.biHeight = -client_h;
+        full_bmi.bmiHeader.biPlanes = 1;
+        full_bmi.bmiHeader.biBitCount = 32;
+        full_bmi.bmiHeader.biCompression = BI_RGB;
+        void *full_bits = nullptr;
+        HBITMAP full_bmp = ::CreateDIBSection(
+            source, &full_bmi, DIB_RGB_COLORS,
+            &full_bits, nullptr, 0);
+        if (full_dc && full_bmp && full_bits) {
+            HGDIOBJ full_old = ::SelectObject(full_dc, full_bmp);
+            constexpr UINT kPwClientOnly = 0x00000001;
+            constexpr UINT kPwRenderFullContent = 0x00000002;
+            const BOOL printed = ::PrintWindow(
+                hwnd, full_dc, kPwClientOnly | kPwRenderFullContent);
+            if (printed) {
+                copied = ::BitBlt(
+                    memory, 0, 0, width, height,
+                    full_dc, x1, y1, SRCCOPY);
+            }
+            if (full_old) ::SelectObject(full_dc, full_old);
+        }
+        if (full_bmp) ::DeleteObject(full_bmp);
+        if (full_dc) ::DeleteDC(full_dc);
+    }
+
+    if (old) ::SelectObject(memory, old);
+
+    if (copied) {
+        out.x = x1;
+        out.y = y1;
+        out.width = width;
+        out.height = height;
+        out.pixels.resize(
+            static_cast<size_t>(width) *
+            static_cast<size_t>(height));
+        const auto *src =
+            static_cast<const unsigned char *>(bits);
+        for (size_t i = 0; i < out.pixels.size(); ++i) {
+            out.pixels[i].b = src[i*4+0];
+            out.pixels[i].g = src[i*4+1];
+            out.pixels[i].r = src[i*4+2];
+        }
+    }
+
+    ::DeleteObject(bitmap);
+    ::DeleteDC(memory);
+    ::ReleaseDC(hwnd, source);
+    return copied != FALSE;
+}
+
+bool CaptureScreenRegionBaseForObjectCompat(
+    DmImpl *p, long x1, long y1, long x2, long y2,
+    ScreenImageCompat &out) {
+    if (!p) return CaptureScreenRegionCompat(x1,y1,x2,y2,out);
+
+    HWND hwnd = nullptr;
+    std::string display = "normal";
+    long bind_enable = 1;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        hwnd = p->bound_hwnd;
+        display = p->bind_display;
+        bind_enable = p->bind_enable;
+    }
+    if (!hwnd || !::IsWindow(hwnd))
+        return CaptureScreenRegionCompat(x1,y1,x2,y2,out);
+
+    // EnableBind -1/0/5 makes graphics act as normal/front mode while
+    // preserving the binding and client-coordinate convention.
+    if (bind_enable != 1) display = "normal";
+    return CaptureBoundClientRegionCompat(
+        hwnd, display, x1,y1,x2,y2,out);
+}
+
 bool CaptureScreenRegionForObjectCompat(
     DmImpl *p, long x1, long y1, long x2, long y2, ScreenImageCompat &out) {
-    if (!CaptureScreenRegionCompat(x1, y1, x2, y2, out)) return false;
+    if (!CaptureScreenRegionBaseForObjectCompat(p, x1, y1, x2, y2, out)) return false;
     if (!p) return true;
 
     std::vector<ExcludeRegionCompat> regions;
@@ -1782,12 +1984,23 @@ bool CaptureScreenRegionForObjectCompat(
 }
 
 bool ReadScreenPixelCompat(DmImpl *p, long x, long y, RgbColorCompat &out) {
-    if (p && p->get_color_by_capture) {
-        ScreenImageCompat image;
-        if (!CaptureScreenRegionCompat(x, y, x, y, image) || image.pixels.empty())
-            return false;
-        out = image.pixels.front();
-        return true;
+    if (p) {
+        HWND bound = nullptr;
+        bool by_capture = false;
+        {
+            std::lock_guard<std::mutex> lock(p->state_mutex);
+            bound = p->bound_hwnd;
+            by_capture = p->get_color_by_capture;
+        }
+        if (bound || by_capture) {
+            ScreenImageCompat image;
+            if (!CaptureScreenRegionBaseForObjectCompat(
+                    p, x, y, x, y, image) ||
+                image.pixels.empty())
+                return false;
+            out = image.pixels.front();
+            return true;
+        }
     }
 
     HDC dc = ::GetDC(nullptr);
@@ -3572,6 +3785,7 @@ dmsoft::~dmsoft() {
             ::mciSendStringA(close.c_str(), nullptr, 0, nullptr);
         }
         p->play_aliases.clear();
+        ClearObjectBindingCompat(p);
         FreeLegacyBinBufferCompat(p);
         g_dm_object_count.fetch_sub(1, std::memory_order_relaxed);
         delete p;
@@ -7099,6 +7313,149 @@ long dmsoft::CheckInputMethod(long hwnd, PCSTR id) {
 
 long dmsoft::ActiveInputMethod(long hwnd, PCSTR id) {
     return ActivateLayoutTextCompat(HwndFromLong(hwnd), id) ? 1 : 0;
+}
+
+
+long dmsoft::BindWindow(
+    long hwnd, PCSTR display, PCSTR mouse,
+    PCSTR keypad, long mode) {
+    return BindWindowEx(
+        hwnd, display, mouse, keypad, "", mode);
+}
+
+long dmsoft::BindWindowEx(
+    long hwnd, PCSTR display, PCSTR mouse,
+    PCSTR keypad, PCSTR public_desc, long mode) {
+    auto *p = P(impl);
+    HWND target = HwndFromLong(hwnd);
+    if (!p || !target || !::IsWindow(target) ||
+        !display || !mouse || !keypad || !public_desc)
+        return 0;
+
+    const auto allowed_display =
+        _stricmp(display,"normal")==0 ||
+        _stricmp(display,"gdi")==0 ||
+        _stricmp(display,"gdi2")==0;
+    const auto allowed_mouse =
+        _stricmp(mouse,"normal")==0 ||
+        _stricmp(mouse,"windows")==0 ||
+        _stricmp(mouse,"windows3")==0;
+    const auto allowed_keypad =
+        _stricmp(keypad,"normal")==0 ||
+        _stricmp(keypad,"windows")==0;
+
+    // DX/driver/injection modes are intentionally not claimed as recovered
+    // until their original behavior is separately reconstructed.
+    if (!allowed_display || !allowed_mouse || !allowed_keypad)
+        return 0;
+    if (mode != 0 && mode != 2)
+        return 0;
+
+    HWND old = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        old = p->bound_hwnd;
+        p->bound_hwnd = target;
+        p->bind_display = display;
+        p->bind_mouse = mouse;
+        p->bind_keypad = keypad;
+        p->bind_public = public_desc;
+        p->bind_mode = mode;
+        p->bind_enable = 1;
+
+        POINT cursor{};
+        if (::GetCursorPos(&cursor) &&
+            ::ScreenToClient(target, &cursor)) {
+            p->virtual_mouse_x = cursor.x;
+            p->virtual_mouse_y = cursor.y;
+        } else {
+            p->virtual_mouse_x = 0;
+            p->virtual_mouse_y = 0;
+        }
+    }
+
+    if (old && old != target)
+        UnregisterBoundWindowCompat(old);
+    if (!old || old != target)
+        RegisterBoundWindowCompat(target);
+    return 1;
+}
+
+long dmsoft::UnBindWindow() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    HWND old = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        old = p->bound_hwnd;
+    }
+    if (!old) return 0;
+    ClearObjectBindingCompat(p);
+    return 1;
+}
+
+long dmsoft::ForceUnBindWindow(long hwnd) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    const HWND target = HwndFromLong(hwnd);
+    HWND current = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        current = p->bound_hwnd;
+    }
+    if (!target || current != target) return 0;
+    ClearObjectBindingCompat(p);
+    return 1;
+}
+
+long dmsoft::GetBindWindow() {
+    auto *p = P(impl);
+    if (!p) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    return static_cast<long>(
+        reinterpret_cast<INT_PTR>(p->bound_hwnd));
+}
+
+long dmsoft::IsBind(long hwnd) {
+    return IsWindowBoundCompat(HwndFromLong(hwnd)) ? 1 : 0;
+}
+
+long dmsoft::EnableBind(long en) {
+    auto *p = P(impl);
+    if (!p) return 0;
+    if (en != -1 && en != 0 && en != 1 && en != 5)
+        return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd) return 0;
+    p->bind_enable = en;
+    return 1;
+}
+
+long dmsoft::SwitchBindWindow(long hwnd) {
+    auto *p = P(impl);
+    const HWND target = HwndFromLong(hwnd);
+    if (!p || !target || !::IsWindow(target)) return 0;
+
+    DWORD old_pid = 0, new_pid = 0;
+    HWND old = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        old = p->bound_hwnd;
+    }
+    if (!old) return 0;
+    ::GetWindowThreadProcessId(old, &old_pid);
+    ::GetWindowThreadProcessId(target, &new_pid);
+    if (!old_pid || old_pid != new_pid) return 0;
+
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        p->bound_hwnd = target;
+    }
+    if (old != target) {
+        UnregisterBoundWindowCompat(old);
+        RegisterBoundWindowCompat(target);
+    }
+    return 1;
 }
 
 #include "legacy_dm_generated.inc"
