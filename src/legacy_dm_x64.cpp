@@ -281,6 +281,17 @@ struct DmImpl {
     long bind_enable = 1;
     long virtual_mouse_x = 0;
     long virtual_mouse_y = 0;
+    bool mouse_msg_enabled = true;
+    bool keypad_msg_enabled = true;
+    bool keypad_patch_enabled = false;
+    bool keypad_sync_enabled = false;
+    long keypad_sync_timeout = 0;
+    bool mouse_sync_enabled = false;
+    long mouse_sync_timeout = 0;
+    bool fake_active_enabled = false;
+    bool speed_dx_enabled = false;
+    bool exit_thread_enabled = false;
+    DWORD exit_thread_owner = 0;
     long native_error = 0;
     std::string scratch;
     std::map<std::pair<long, std::string>, std::string> env;
@@ -389,6 +400,15 @@ void ClearObjectBindingCompat(DmImpl *p) {
         p->virtual_mouse_y = 0;
         p->display_locked = false;
         p->locked_display.reset();
+        p->mouse_msg_enabled = true;
+        p->keypad_msg_enabled = true;
+        p->keypad_patch_enabled = false;
+        p->keypad_sync_enabled = false;
+        p->keypad_sync_timeout = 0;
+        p->mouse_sync_enabled = false;
+        p->mouse_sync_timeout = 0;
+        p->fake_active_enabled = false;
+        p->speed_dx_enabled = false;
     }
     UnregisterBoundWindowCompat(old);
 }
@@ -1686,7 +1706,22 @@ long SendBoundMouseMessageCompat(
         lp = MakeMouseLParamCompat(screen.x, screen.y);
     }
 
-    return ::PostMessageA(target, msg, wparam, lp) ? 1 : 0;
+    bool sync = false;
+    long timeout = 0;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        sync = p->mouse_sync_enabled;
+        timeout = p->mouse_sync_timeout;
+    }
+    if (!sync)
+        return ::PostMessageA(target, msg, wparam, lp) ? 1 : 0;
+
+    DWORD_PTR result = 0;
+    const UINT wait = static_cast<UINT>((std::max)(0L, timeout));
+    return ::SendMessageTimeoutA(
+        target, msg, wparam, lp,
+        SMTO_ABORTIFHUNG | SMTO_BLOCK,
+        wait, &result) ? 1 : 0;
 }
 
 long MoveMouseForObjectCompat(DmImpl *p, long x, long y) {
@@ -1801,10 +1836,28 @@ long SendKeyboardVkForObjectCompat(
     if (key_up)
         lp |= (1L << 30) | (1L << 31);
 
-    return ::PostMessageA(
+    bool sync = false;
+    long timeout = 0;
+    {
+        std::lock_guard<std::mutex> lock(p->state_mutex);
+        sync = p->keypad_sync_enabled;
+        timeout = p->keypad_sync_timeout;
+    }
+    if (!sync) {
+        return ::PostMessageA(
+            target,
+            key_up ? WM_KEYUP : WM_KEYDOWN,
+            static_cast<WPARAM>(vk), lp) ? 1 : 0;
+    }
+
+    DWORD_PTR result = 0;
+    const UINT wait = static_cast<UINT>((std::max)(0L, timeout));
+    return ::SendMessageTimeoutA(
         target,
         key_up ? WM_KEYUP : WM_KEYDOWN,
-        static_cast<WPARAM>(vk), lp) ? 1 : 0;
+        static_cast<WPARAM>(vk), lp,
+        SMTO_ABORTIFHUNG | SMTO_BLOCK,
+        wait, &result) ? 1 : 0;
 }
 
 bool PressModifierStateForObjectCompat(
@@ -8454,6 +8507,81 @@ const char *dmsoft::GetNetTimeSafe() {
     // failure shape instead of silently routing to a different service.
     p->scratch = "0000-00-00 00:00:00";
     return p->scratch.c_str();
+}
+
+
+long dmsoft::EnableMouseMsg(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd || !::IsWindow(p->bound_hwnd)) return 0;
+    p->mouse_msg_enabled = en != 0;
+    return 1;
+}
+
+long dmsoft::EnableKeypadMsg(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd || !::IsWindow(p->bound_hwnd)) return 0;
+    p->keypad_msg_enabled = en != 0;
+    return 1;
+}
+
+long dmsoft::EnableKeypadPatch(long enable) {
+    auto *p = P(impl);
+    if (!p || (enable != 0 && enable != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd || !::IsWindow(p->bound_hwnd)) return 0;
+    p->keypad_patch_enabled = enable != 0;
+    return 1;
+}
+
+long dmsoft::EnableKeypadSync(long enable, long time_out) {
+    auto *p = P(impl);
+    if (!p || (enable != 0 && enable != 1) || time_out < 0) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd || !::IsWindow(p->bound_hwnd)) return 0;
+    p->keypad_sync_enabled = enable != 0;
+    p->keypad_sync_timeout = time_out;
+    return 1;
+}
+
+long dmsoft::EnableMouseSync(long enable, long time_out) {
+    auto *p = P(impl);
+    if (!p || (enable != 0 && enable != 1) || time_out < 0) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd || !::IsWindow(p->bound_hwnd)) return 0;
+    p->mouse_sync_enabled = enable != 0;
+    p->mouse_sync_timeout = time_out;
+    return 1;
+}
+
+long dmsoft::EnableFakeActive(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd || !::IsWindow(p->bound_hwnd)) return 0;
+    p->fake_active_enabled = en != 0;
+    return 1;
+}
+
+long dmsoft::EnableSpeedDx(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    if (!p->bound_hwnd || !::IsWindow(p->bound_hwnd)) return 0;
+    p->speed_dx_enabled = en != 0;
+    return 1;
+}
+
+long dmsoft::SetExitThread(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->exit_thread_enabled = en != 0;
+    p->exit_thread_owner = en ? ::GetCurrentThreadId() : 0;
+    return 1;
 }
 
 #include "legacy_dm_generated.inc"
