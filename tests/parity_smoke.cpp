@@ -2434,12 +2434,12 @@ void test_dictionary_core(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     {
         std::ifstream oa(old_saved, std::ios::binary);
         std::ifstream nb(new_saved, std::ios::binary);
-        const std::string old_bytes(
+        const std::string old_bytes{
             std::istreambuf_iterator<char>(oa),
-            std::istreambuf_iterator<char>());
-        const std::string new_bytes(
+            std::istreambuf_iterator<char>()};
+        const std::string new_bytes{
             std::istreambuf_iterator<char>(nb),
-            std::istreambuf_iterator<char>());
+            std::istreambuf_iterator<char>()};
         eq_str("SaveDict-bytes", old_bytes, new_bytes);
     }
 
