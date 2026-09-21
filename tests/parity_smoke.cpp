@@ -2825,6 +2825,171 @@ void test_remote_api_address(
             "__hcbyj_missing_export__"));
 }
 
+
+void test_ocr_core(
+    LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const auto root = make_root();
+    const auto dict_file = root / "ocr_core_dict.txt";
+    const std::string entry =
+        "FFFFFFFF8$A$0.0.33$11";
+    {
+        std::ofstream out(
+            dict_file,
+            std::ios::binary | std::ios::trunc);
+        out << entry;
+    }
+
+    eq_num(
+        "ocr-core-SetDict",
+        old_dm.SetDict(9, dict_file.string().c_str()),
+        new_dm.SetDict(9, dict_file.string().c_str()));
+    eq_num(
+        "ocr-core-UseDict",
+        old_dm.UseDict(9),
+        new_dm.UseDict(9));
+
+    const char *cls = "hcbyj_ocr_core_window";
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = ParityWndProc;
+    wc.hInstance = ::GetModuleHandleA(nullptr);
+    wc.lpszClassName = cls;
+    wc.hbrBackground =
+        reinterpret_cast<HBRUSH>(
+            ::GetStockObject(WHITE_BRUSH));
+    ::RegisterClassA(&wc);
+
+    HWND hwnd = ::CreateWindowExA(
+        0, cls, "ocr-core",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        180, 180, 180, 120,
+        nullptr, nullptr, wc.hInstance, nullptr);
+    if (!hwnd) {
+        fail("ocr-core-window", "created", "failed");
+        return;
+    }
+    ::ShowWindow(hwnd, SW_SHOW);
+    ::UpdateWindow(hwnd);
+
+    {
+        HDC dc = ::GetDC(hwnd);
+        RECT client{};
+        ::GetClientRect(hwnd, &client);
+        ::FillRect(
+            dc, &client,
+            reinterpret_cast<HBRUSH>(
+                ::GetStockObject(WHITE_BRUSH)));
+
+        HBRUSH black =
+            reinterpret_cast<HBRUSH>(
+                ::GetStockObject(BLACK_BRUSH));
+        RECT a1{10, 10, 13, 21};
+        RECT a2{20, 10, 23, 21};
+        ::FillRect(dc, &a1, black);
+        ::FillRect(dc, &a2, black);
+        ::ReleaseDC(hwnd, dc);
+    }
+
+    const long h =
+        static_cast<long>(
+            reinterpret_cast<INT_PTR>(hwnd));
+    const long old_bind =
+        old_dm.BindWindow(
+            h, "gdi", "normal", "normal", 0);
+    const long new_bind =
+        new_dm.BindWindow(
+            h, "gdi", "normal", "normal", 0);
+    eq_num(
+        "ocr-core-BindWindow",
+        old_bind, new_bind);
+
+    if (old_bind && new_bind) {
+        const char *oa =
+            old_dm.Ocr(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+        const std::string old_ocr =
+            oa ? oa : "<null>";
+        const char *na =
+            new_dm.Ocr(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+        const std::string new_ocr =
+            na ? na : "<null>";
+        eq_str(
+            "Ocr-controlled",
+            old_ocr, new_ocr);
+
+        const char *ob =
+            old_dm.OcrEx(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+        const std::string old_ex =
+            ob ? ob : "<null>";
+        const char *nb =
+            new_dm.OcrEx(
+                0, 0, 79, 39,
+                "000000-000000", 1.0);
+        const std::string new_ex =
+            nb ? nb : "<null>";
+        eq_str(
+            "OcrEx-controlled",
+            old_ex, new_ex);
+
+        long ox = 777, oy = 888;
+        long nx = 777, ny = 888;
+        const long old_find =
+            old_dm.FindStr(
+                0, 0, 79, 39,
+                "AA|A",
+                "000000-000000", 1.0,
+                &ox, &oy);
+        const long new_find =
+            new_dm.FindStr(
+                0, 0, 79, 39,
+                "AA|A",
+                "000000-000000", 1.0,
+                &nx, &ny);
+        eq_num(
+            "FindStr-controlled-ret",
+            old_find, new_find);
+        eq_num(
+            "FindStr-controlled-x",
+            ox, nx);
+        eq_num(
+            "FindStr-controlled-y",
+            oy, ny);
+
+        const char *oc =
+            old_dm.FindStrEx(
+                0, 0, 79, 39,
+                "A|AA",
+                "000000-000000", 1.0);
+        const std::string old_find_ex =
+            oc ? oc : "<null>";
+        const char *nc =
+            new_dm.FindStrEx(
+                0, 0, 79, 39,
+                "A|AA",
+                "000000-000000", 1.0);
+        const std::string new_find_ex =
+            nc ? nc : "<null>";
+        eq_str(
+            "FindStrEx-controlled",
+            old_find_ex, new_find_ex);
+    }
+
+    old_dm.UnBindWindow();
+    new_dm.UnBindWindow();
+    old_dm.ClearDict(9);
+    new_dm.ClearDict(9);
+
+    ::DestroyWindow(hwnd);
+    ::UnregisterClassA(cls, wc.hInstance);
+
+    std::error_code ec;
+    std::filesystem::remove(dict_file, ec);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2854,6 +3019,7 @@ int main(int argc, char **argv) {
         test_encoded_capture(old_dm, new_dm);
         test_ocr_state(old_dm, new_dm);
         test_dictionary_core(old_dm, new_dm);
+        test_ocr_core(old_dm, new_dm);
         test_critical_and_password(legacy_path, old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
