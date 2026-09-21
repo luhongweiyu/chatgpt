@@ -391,6 +391,11 @@ public:
 
     LONGLONG GetRemoteApiAddress(long hwnd,LONGLONG base_addr,PCSTR fun_name) { using F=LONGLONG(WINAPI*)(long,long,LONGLONG,PCSTR); return at<F>(102496)(obj_,hwnd,base_addr,fun_name); }
 
+    const char *Ocr(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(116880)(obj_,x1,y1,x2,y2,color,sim); }
+    const char *OcrEx(long x1,long y1,long x2,long y2,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,double); return at<F>(116240)(obj_,x1,y1,x2,y2,color,sim); }
+    long FindStr(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long*,long*); return at<F>(104672)(obj_,x1,y1,x2,y2,str,color,sim,x,y); }
+    const char *FindStrEx(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(124448)(obj_,x1,y1,x2,y2,str,color,sim); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
