@@ -399,7 +399,7 @@ public:
     long FindStrFast(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim,long *x,long *y) { using F=long(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double,long*,long*); return at<F>(107664)(obj_,x1,y1,x2,y2,str,color,sim,x,y); }
     const char *FindStrFastEx(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(103824)(obj_,x1,y1,x2,y2,str,color,sim); }
     const char *FindStrE(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(117456)(obj_,x1,y1,x2,y2,str,color,sim); }
-    const char *FindStrFastE(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(107024)(obj_,x1,y1,x2,y2,str,color,sim); }
+    const char *FindStrFastE(long x1,long y1,long x2,long y2,PCSTR str,PCSTR color,double sim) { using F=PCSTR(WINAPI*)(long,long,long,long,long,PCSTR,PCSTR,double); return at<F>(106752)(obj_,x1,y1,x2,y2,str,color,sim); }
 
 private:
     template<class T>
