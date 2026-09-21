@@ -363,6 +363,14 @@ public:
     long SpeedNormalGraphic(long en) { using F=long(WINAPI*)(long,long); return at<F>(124400)(obj_,en); }
     long LockDisplay(long lock) { using F=long(WINAPI*)(long,long); return at<F>(124768)(obj_,lock); }
 
+    long SetDict(long index,PCSTR dict_name) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(112912)(obj_,index,dict_name); }
+    const char *GetDict(long index,long font_index) { using F=PCSTR(WINAPI*)(long,long,long); return at<F>(116816)(obj_,index,font_index); }
+    long SetDictMem(long index,long addr,long size) { using F=long(WINAPI*)(long,long,long,long); return at<F>(109520)(obj_,index,addr,size); }
+    long AddDict(long index,PCSTR dict_info) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(105376)(obj_,index,dict_info); }
+    long SaveDict(long index,PCSTR file) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(125696)(obj_,index,file); }
+    long ClearDict(long index) { using F=long(WINAPI*)(long,long); return at<F>(115280)(obj_,index); }
+    long GetDictCount(long index) { using F=long(WINAPI*)(long,long); return at<F>(117328)(obj_,index); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
