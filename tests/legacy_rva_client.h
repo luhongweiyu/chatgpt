@@ -348,6 +348,15 @@ public:
     long ActiveInputMethod(long hwnd,PCSTR id) { using F=long(WINAPI*)(long,long,PCSTR); return at<F>(110176)(obj_,hwnd,id); }
     long EnableIme(long en) { using F=long(WINAPI*)(long,long); return at<F>(104768)(obj_,en); }
 
+    long BindWindow(long hwnd,PCSTR display,PCSTR mouse,PCSTR keypad,long mode) { using F=long(WINAPI*)(long,long,PCSTR,PCSTR,PCSTR,long); return at<F>(104496)(obj_,hwnd,display,mouse,keypad,mode); }
+    long BindWindowEx(long hwnd,PCSTR display,PCSTR mouse,PCSTR keypad,PCSTR public_desc,long mode) { using F=long(WINAPI*)(long,long,PCSTR,PCSTR,PCSTR,PCSTR,long); return at<F>(102912)(obj_,hwnd,display,mouse,keypad,public_desc,mode); }
+    long UnBindWindow() { using F=long(WINAPI*)(long); return at<F>(108096)(obj_); }
+    long ForceUnBindWindow(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(120400)(obj_,hwnd); }
+    long GetBindWindow() { using F=long(WINAPI*)(long); return at<F>(118976)(obj_); }
+    long IsBind(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(109472)(obj_,hwnd); }
+    long EnableBind(long en) { using F=long(WINAPI*)(long,long); return at<F>(105248)(obj_,en); }
+    long SwitchBindWindow(long hwnd) { using F=long(WINAPI*)(long,long); return at<F>(109328)(obj_,hwnd); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
