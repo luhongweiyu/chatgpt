@@ -389,6 +389,8 @@ public:
     long EnableRealKeypad(long en) { using F=long(WINAPI*)(long,long); return at<F>(121952)(obj_,en); }
     long EnableRealMouse(long en,long delay,long step) { using F=long(WINAPI*)(long,long,long,long); return at<F>(102848)(obj_,en,delay,step); }
 
+    LONGLONG GetRemoteApiAddress(long hwnd,LONGLONG base_addr,PCSTR fun_name) { using F=LONGLONG(WINAPI*)(long,long,LONGLONG,PCSTR); return at<F>(102496)(obj_,hwnd,base_addr,fun_name); }
+
 private:
     template<class T>
     T at(ULONG_PTR rva) const {
