@@ -939,6 +939,260 @@ long WindowsMouseSpeedFromLevelCompat(long level) {
 }
 
 
+
+bool ReadProcessExactCompat(
+    HANDLE process, ULONGLONG address,
+    void *out, SIZE_T size) {
+    if (!process || !out || size == 0) return false;
+    SIZE_T got = 0;
+    return ::ReadProcessMemory(
+               process,
+               reinterpret_cast<LPCVOID>(
+                   static_cast<ULONG_PTR>(address)),
+               out, size, &got) &&
+           got == size;
+}
+
+std::string ReadRemoteAsciiCompat(
+    HANDLE process, ULONGLONG address,
+    size_t max_len = 1024) {
+    std::string out;
+    out.reserve((std::min)(max_len, size_t{128}));
+    for (size_t i = 0; i < max_len; ++i) {
+        char ch = 0;
+        if (!ReadProcessExactCompat(
+                process, address + i, &ch, 1))
+            return {};
+        if (ch == '\0') return out;
+        out.push_back(ch);
+    }
+    return {};
+}
+
+bool GetRemoteExportDirectoryCompat(
+    HANDLE process, ULONGLONG base,
+    IMAGE_EXPORT_DIRECTORY &exp,
+    DWORD &export_rva,
+    DWORD &export_size) {
+    IMAGE_DOS_HEADER dos{};
+    if (!ReadProcessExactCompat(
+            process, base, &dos, sizeof(dos)) ||
+        dos.e_magic != IMAGE_DOS_SIGNATURE ||
+        dos.e_lfanew <= 0)
+        return false;
+
+    const ULONGLONG nt =
+        base + static_cast<DWORD>(dos.e_lfanew);
+
+    DWORD signature = 0;
+    IMAGE_FILE_HEADER file{};
+    if (!ReadProcessExactCompat(
+            process, nt, &signature,
+            sizeof(signature)) ||
+        signature != IMAGE_NT_SIGNATURE ||
+        !ReadProcessExactCompat(
+            process, nt + sizeof(signature),
+            &file, sizeof(file)))
+        return false;
+
+    const ULONGLONG opt =
+        nt + sizeof(signature) +
+        sizeof(IMAGE_FILE_HEADER);
+
+    WORD magic = 0;
+    if (!ReadProcessExactCompat(
+            process, opt, &magic, sizeof(magic)))
+        return false;
+
+    IMAGE_DATA_DIRECTORY dir{};
+    if (magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        IMAGE_OPTIONAL_HEADER32 oh{};
+        const SIZE_T to_read =
+            (std::min)(
+                static_cast<SIZE_T>(file.SizeOfOptionalHeader),
+                sizeof(oh));
+        if (to_read <
+                offsetof(
+                    IMAGE_OPTIONAL_HEADER32,
+                    DataDirectory) +
+                    sizeof(IMAGE_DATA_DIRECTORY) *
+                        (IMAGE_DIRECTORY_ENTRY_EXPORT + 1) ||
+            !ReadProcessExactCompat(
+                process, opt, &oh, to_read))
+            return false;
+        dir =
+            oh.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_EXPORT];
+    } else if (
+        magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        IMAGE_OPTIONAL_HEADER64 oh{};
+        const SIZE_T to_read =
+            (std::min)(
+                static_cast<SIZE_T>(file.SizeOfOptionalHeader),
+                sizeof(oh));
+        if (to_read <
+                offsetof(
+                    IMAGE_OPTIONAL_HEADER64,
+                    DataDirectory) +
+                    sizeof(IMAGE_DATA_DIRECTORY) *
+                        (IMAGE_DIRECTORY_ENTRY_EXPORT + 1) ||
+            !ReadProcessExactCompat(
+                process, opt, &oh, to_read))
+            return false;
+        dir =
+            oh.DataDirectory[
+                IMAGE_DIRECTORY_ENTRY_EXPORT];
+    } else {
+        return false;
+    }
+
+    if (!dir.VirtualAddress ||
+        dir.Size < sizeof(IMAGE_EXPORT_DIRECTORY))
+        return false;
+
+    export_rva = dir.VirtualAddress;
+    export_size = dir.Size;
+    return ReadProcessExactCompat(
+        process, base + export_rva,
+        &exp, sizeof(exp));
+}
+
+LONGLONG ResolveRemoteExportCompat(
+    HANDLE process, DWORD pid,
+    ULONGLONG base,
+    const std::string &symbol,
+    int depth = 0) {
+    if (!process || !base || symbol.empty() ||
+        depth > 8)
+        return 0;
+
+    IMAGE_EXPORT_DIRECTORY exp{};
+    DWORD export_rva = 0;
+    DWORD export_size = 0;
+    if (!GetRemoteExportDirectoryCompat(
+            process, base, exp,
+            export_rva, export_size))
+        return 0;
+
+    if (!exp.AddressOfFunctions ||
+        exp.NumberOfFunctions == 0 ||
+        exp.NumberOfFunctions > 1000000)
+        return 0;
+
+    DWORD function_index = MAXDWORD;
+
+    if (symbol[0] == '#') {
+        char *end = nullptr;
+        const unsigned long ordinal =
+            std::strtoul(
+                symbol.c_str() + 1,
+                &end, 10);
+        if (!end || *end != '\0' ||
+            ordinal < exp.Base)
+            return 0;
+        const unsigned long index =
+            ordinal - exp.Base;
+        if (index >= exp.NumberOfFunctions)
+            return 0;
+        function_index =
+            static_cast<DWORD>(index);
+    } else {
+        if (!exp.AddressOfNames ||
+            !exp.AddressOfNameOrdinals ||
+            exp.NumberOfNames > 1000000)
+            return 0;
+
+        for (DWORD i = 0;
+             i < exp.NumberOfNames; ++i) {
+            DWORD name_rva = 0;
+            WORD ordinal_index = 0;
+            if (!ReadProcessExactCompat(
+                    process,
+                    base + exp.AddressOfNames +
+                        static_cast<ULONGLONG>(i) *
+                            sizeof(DWORD),
+                    &name_rva, sizeof(name_rva)) ||
+                !ReadProcessExactCompat(
+                    process,
+                    base +
+                        exp.AddressOfNameOrdinals +
+                        static_cast<ULONGLONG>(i) *
+                            sizeof(WORD),
+                    &ordinal_index,
+                    sizeof(ordinal_index)))
+                return 0;
+
+            const std::string remote_name =
+                ReadRemoteAsciiCompat(
+                    process, base + name_rva,
+                    4096);
+            if (remote_name == symbol) {
+                if (ordinal_index >=
+                    exp.NumberOfFunctions)
+                    return 0;
+                function_index = ordinal_index;
+                break;
+            }
+        }
+    }
+
+    if (function_index == MAXDWORD)
+        return 0;
+
+    DWORD function_rva = 0;
+    if (!ReadProcessExactCompat(
+            process,
+            base + exp.AddressOfFunctions +
+                static_cast<ULONGLONG>(
+                    function_index) *
+                    sizeof(DWORD),
+            &function_rva,
+            sizeof(function_rva)) ||
+        !function_rva)
+        return 0;
+
+    const ULONGLONG export_end =
+        static_cast<ULONGLONG>(export_rva) +
+        export_size;
+    if (function_rva >= export_rva &&
+        function_rva < export_end) {
+        const std::string forwarder =
+            ReadRemoteAsciiCompat(
+                process, base + function_rva,
+                4096);
+        const size_t dot =
+            forwarder.find('.');
+        if (dot == std::string::npos ||
+            dot == 0 ||
+            dot + 1 >= forwarder.size())
+            return 0;
+
+        std::string module =
+            forwarder.substr(0, dot);
+        std::string forwarded_symbol =
+            forwarder.substr(dot + 1);
+        if (module.find('.') ==
+            std::string::npos)
+            module += ".dll";
+
+        const LONGLONG forwarded_base =
+            ModuleBaseForPidCompat(
+                pid, module);
+        if (!forwarded_base)
+            return 0;
+
+        return ResolveRemoteExportCompat(
+            process, pid,
+            static_cast<ULONGLONG>(
+                forwarded_base),
+            forwarded_symbol,
+            depth + 1);
+    }
+
+    return static_cast<LONGLONG>(
+        base + function_rva);
+}
+
 LONGLONG ModuleBaseForPidCompat(DWORD pid, const std::string &module_name) {
     HANDLE snap = ::CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
     if (snap == INVALID_HANDLE_VALUE) return 0;
@@ -8712,6 +8966,44 @@ long dmsoft::EnableRealMouse(
         p->real_mouse_step = mousestep;
     }
     return 1;
+}
+
+
+LONGLONG dmsoft::GetRemoteApiAddress(
+    long hwnd, LONGLONG base_addr,
+    PCSTR fun_name) {
+    auto *p = P(impl);
+    if (!p || base_addr == 0 ||
+        !fun_name || !*fun_name)
+        return 0;
+
+    const DWORD pid = ResolvePid(p, hwnd);
+    if (!pid) return 0;
+
+    HANDLE process = ::OpenProcess(
+        PROCESS_VM_READ |
+        PROCESS_QUERY_INFORMATION,
+        FALSE, pid);
+    if (!process) {
+        SetNativeError(
+            p,
+            static_cast<long>(
+                ::GetLastError()));
+        return 0;
+    }
+
+    const LONGLONG result =
+        ResolveRemoteExportCompat(
+            process, pid,
+            static_cast<ULONGLONG>(
+                base_addr),
+            fun_name);
+    ::CloseHandle(process);
+
+    SetNativeError(
+        p,
+        result ? 0 : ERROR_PROC_NOT_FOUND);
+    return result;
 }
 
 #include "legacy_dm_generated.inc"
