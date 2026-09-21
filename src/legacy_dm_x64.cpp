@@ -86,6 +86,9 @@ struct DmImpl {
     long mouse_delay_windows = 10;
     long mouse_delay_dx = 40;
     bool get_color_by_capture = true;
+    bool speed_normal_graphic = false;
+    bool display_locked = false;
+    std::shared_ptr<ScreenImageCompat> locked_display;
     long next_play_id = 1;
     std::map<long, std::string> play_aliases;
     bool pic_cache_enabled = true;
@@ -168,6 +171,8 @@ void ClearObjectBindingCompat(DmImpl *p) {
         p->bind_enable = 1;
         p->virtual_mouse_x = 0;
         p->virtual_mouse_y = 0;
+        p->display_locked = false;
+        p->locked_display.reset();
     }
     UnregisterBoundWindowCompat(old);
 }
@@ -1934,6 +1939,38 @@ struct ScreenImageCompat {
     }
 };
 
+bool CropScreenImageCompat(
+    const ScreenImageCompat &source,
+    long x1, long y1, long x2, long y2,
+    ScreenImageCompat &out) {
+    if (x2 < x1 || y2 < y1 ||
+        x1 < source.x || y1 < source.y ||
+        x2 >= source.x + source.width ||
+        y2 >= source.y + source.height)
+        return false;
+
+    out = {};
+    out.x = x1;
+    out.y = y1;
+    out.width = x2 - x1 + 1;
+    out.height = y2 - y1 + 1;
+    out.pixels.resize(
+        static_cast<size_t>(out.width) *
+        static_cast<size_t>(out.height));
+
+    for (long y = 0; y < out.height; ++y) {
+        for (long x = 0; x < out.width; ++x) {
+            const auto *pixel = source.At(x1 + x, y1 + y);
+            if (!pixel) return false;
+            out.pixels[
+                static_cast<size_t>(y) *
+                    static_cast<size_t>(out.width) +
+                static_cast<size_t>(x)] = *pixel;
+        }
+    }
+    return true;
+}
+
 thread_local std::shared_ptr<ScreenImageCompat> g_last_graphic_capture;
 
 bool CaptureScreenRegionCompat(long x1, long y1, long x2, long y2, ScreenImageCompat &out) {
@@ -2141,12 +2178,20 @@ bool CaptureScreenRegionBaseForObjectCompat(
     HWND hwnd = nullptr;
     std::string display = "normal";
     long bind_enable = 1;
+    bool display_locked = false;
+    std::shared_ptr<ScreenImageCompat> locked_display;
     {
         std::lock_guard<std::mutex> lock(p->state_mutex);
         hwnd = p->bound_hwnd;
         display = p->bind_display;
         bind_enable = p->bind_enable;
+        display_locked = p->display_locked;
+        locked_display = p->locked_display;
     }
+
+    if (display_locked && locked_display &&
+        CropScreenImageCompat(*locked_display, x1, y1, x2, y2, out))
+        return true;
     if (!hwnd || !::IsWindow(hwnd))
         return CaptureScreenRegionCompat(x1,y1,x2,y2,out);
 
@@ -7721,6 +7766,141 @@ long dmsoft::SwitchBindWindow(long hwnd) {
     if (old != target) {
         UnregisterBoundWindowCompat(old);
         RegisterBoundWindowCompat(target);
+    }
+    return 1;
+}
+
+
+long dmsoft::GetCpuType() {
+    int cpu[4]{};
+    __cpuid(cpu, 0);
+    char vendor[13]{};
+    std::memcpy(vendor + 0, &cpu[1], 4);
+    std::memcpy(vendor + 4, &cpu[3], 4);
+    std::memcpy(vendor + 8, &cpu[2], 4);
+    if (std::strcmp(vendor, "GenuineIntel") == 0) return 1;
+    if (std::strcmp(vendor, "AuthenticAMD") == 0) return 2;
+    return 0;
+}
+
+const char *dmsoft::GetCursorSpot() {
+    auto *p = P(impl);
+    if (!p) return "";
+
+    CURSORINFO ci{};
+    ci.cbSize = sizeof(ci);
+    if (!::GetCursorInfo(&ci) || !ci.hCursor) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    ICONINFO ii{};
+    if (!::GetIconInfo(ci.hCursor, &ii)) {
+        p->scratch.clear();
+        return p->scratch.c_str();
+    }
+
+    std::ostringstream oss;
+    oss << ii.xHotspot << ',' << ii.yHotspot;
+    p->scratch = oss.str();
+
+    if (ii.hbmMask) ::DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) ::DeleteObject(ii.hbmColor);
+    return p->scratch.c_str();
+}
+
+long dmsoft::SpeedNormalGraphic(long en) {
+    auto *p = P(impl);
+    if (!p || (en != 0 && en != 1)) return 0;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    p->speed_normal_graphic = en != 0;
+    return 1;
+}
+
+long dmsoft::IsDisplayDead(long x1, long y1, long x2, long y2, long t) {
+    auto *p = P(impl);
+    if (!p || x2 < x1 || y2 < y1 || t < 0) return 0;
+
+    ScreenImageCompat first;
+    if (!CaptureScreenRegionForObjectCompat(p, x1, y1, x2, y2, first))
+        return 0;
+
+    const ULONGLONG timeout =
+        static_cast<ULONGLONG>(t) * 1000ULL;
+    const ULONGLONG start = ::GetTickCount64();
+
+    for (;;) {
+        HWND bound = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(p->state_mutex);
+            bound = p->bound_hwnd;
+        }
+        if (bound && !::IsWindow(bound)) return 1;
+
+        if (::GetTickCount64() - start >= timeout)
+            return 1;
+
+        ::Sleep(50);
+
+        ScreenImageCompat current;
+        if (!CaptureScreenRegionForObjectCompat(
+                p, x1, y1, x2, y2, current))
+            return 0;
+
+        if (current.width != first.width ||
+            current.height != first.height ||
+            current.pixels.size() != first.pixels.size())
+            return 0;
+
+        if (!std::equal(
+                current.pixels.begin(),
+                current.pixels.end(),
+                first.pixels.begin(),
+                [](const RgbColorCompat &a, const RgbColorCompat &b) {
+                    return a.r == b.r &&
+                           a.g == b.g &&
+                           a.b == b.b;
+                }))
+            return 0;
+    }
+}
+
+long dmsoft::LockDisplay(long lock) {
+    auto *p = P(impl);
+    if (!p || (lock != 0 && lock != 1)) return 0;
+
+    if (lock == 0) {
+        std::lock_guard<std::mutex> guard(p->state_mutex);
+        p->display_locked = false;
+        p->locked_display.reset();
+        return 1;
+    }
+
+    HWND hwnd = nullptr;
+    std::string display;
+    {
+        std::lock_guard<std::mutex> guard(p->state_mutex);
+        hwnd = p->bound_hwnd;
+        display = p->bind_display;
+    }
+    if (!hwnd || !::IsWindow(hwnd)) return 0;
+
+    RECT client{};
+    if (!::GetClientRect(hwnd, &client)) return 0;
+    const long width = client.right - client.left;
+    const long height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) return 0;
+
+    ScreenImageCompat captured;
+    if (!CaptureBoundClientRegionCompat(
+            hwnd, display, 0, 0, width - 1, height - 1, captured))
+        return 0;
+
+    {
+        std::lock_guard<std::mutex> guard(p->state_mutex);
+        p->locked_display =
+            std::make_shared<ScreenImageCompat>(std::move(captured));
+        p->display_locked = true;
     }
     return 1;
 }
