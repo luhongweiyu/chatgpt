@@ -1252,6 +1252,222 @@ long MoveMouseAbsoluteCompat(long x, long y) {
         static_cast<LONG>(nx), static_cast<LONG>(ny));
 }
 
+
+struct BindingSnapshotCompat {
+    HWND hwnd = nullptr;
+    std::string mouse = "normal";
+    std::string keypad = "normal";
+    long enable = 1;
+    long mouse_x = 0;
+    long mouse_y = 0;
+};
+
+BindingSnapshotCompat BindingSnapshotForObjectCompat(DmImpl *p) {
+    BindingSnapshotCompat out{};
+    if (!p) return out;
+    std::lock_guard<std::mutex> lock(p->state_mutex);
+    out.hwnd = p->bound_hwnd;
+    out.mouse = p->bind_mouse;
+    out.keypad = p->bind_keypad;
+    out.enable = p->bind_enable;
+    out.mouse_x = p->virtual_mouse_x;
+    out.mouse_y = p->virtual_mouse_y;
+    return out;
+}
+
+bool BoundInputEnabledCompat(const BindingSnapshotCompat &b) {
+    return b.hwnd && ::IsWindow(b.hwnd) &&
+           (b.enable == 1 || b.enable == -1);
+}
+
+HWND ResolveBoundMouseTargetCompat(
+    const BindingSnapshotCompat &b, POINT &client_point) {
+    if (!BoundInputEnabledCompat(b)) return nullptr;
+    HWND target = b.hwnd;
+    if (_stricmp(b.mouse.c_str(), "windows3") != 0)
+        return target;
+
+    POINT screen_point = client_point;
+    if (!::ClientToScreen(b.hwnd, &screen_point))
+        return target;
+
+    HWND deepest = ::WindowFromPoint(screen_point);
+    if (!deepest || (deepest != b.hwnd && !::IsChild(b.hwnd, deepest)))
+        return target;
+
+    POINT target_point = screen_point;
+    if (!::ScreenToClient(deepest, &target_point))
+        return target;
+    client_point = target_point;
+    return deepest;
+}
+
+LPARAM MakeMouseLParamCompat(long x, long y) {
+    return MAKELPARAM(
+        static_cast<short>(x),
+        static_cast<short>(y));
+}
+
+long SendBoundMouseMessageCompat(
+    DmImpl *p, UINT msg, WPARAM wparam = 0) {
+    const auto b = BindingSnapshotForObjectCompat(p);
+    if (!BoundInputEnabledCompat(b) ||
+        (_stricmp(b.mouse.c_str(), "windows") != 0 &&
+         _stricmp(b.mouse.c_str(), "windows3") != 0))
+        return 0;
+
+    POINT pt{
+        static_cast<LONG>(b.mouse_x),
+        static_cast<LONG>(b.mouse_y)
+    };
+    HWND target = ResolveBoundMouseTargetCompat(b, pt);
+    if (!target) return 0;
+
+    LPARAM lp = MakeMouseLParamCompat(pt.x, pt.y);
+    if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
+        POINT screen = pt;
+        if (!::ClientToScreen(target, &screen)) return 0;
+        lp = MakeMouseLParamCompat(screen.x, screen.y);
+    }
+
+    return ::PostMessageA(target, msg, wparam, lp) ? 1 : 0;
+}
+
+long MoveMouseForObjectCompat(DmImpl *p, long x, long y) {
+    if (!p) return 0;
+    const auto b = BindingSnapshotForObjectCompat(p);
+    if (b.hwnd && ::IsWindow(b.hwnd)) {
+        {
+            std::lock_guard<std::mutex> lock(p->state_mutex);
+            p->virtual_mouse_x = x;
+            p->virtual_mouse_y = y;
+        }
+
+        if (BoundInputEnabledCompat(b) &&
+            (_stricmp(b.mouse.c_str(), "windows") == 0 ||
+             _stricmp(b.mouse.c_str(), "windows3") == 0)) {
+            return SendBoundMouseMessageCompat(p, WM_MOUSEMOVE, 0);
+        }
+
+        POINT screen{
+            static_cast<LONG>(x),
+            static_cast<LONG>(y)
+        };
+        if (!::ClientToScreen(b.hwnd, &screen)) return 0;
+        return MoveMouseAbsoluteCompat(screen.x, screen.y);
+    }
+    return MoveMouseAbsoluteCompat(x, y);
+}
+
+long MoveMouseRelativeForObjectCompat(DmImpl *p, long rx, long ry) {
+    if (!p) return 0;
+    const auto b = BindingSnapshotForObjectCompat(p);
+    if (b.hwnd && ::IsWindow(b.hwnd) &&
+        BoundInputEnabledCompat(b) &&
+        (_stricmp(b.mouse.c_str(), "windows") == 0 ||
+         _stricmp(b.mouse.c_str(), "windows3") == 0)) {
+        long x = b.mouse_x + rx;
+        long y = b.mouse_y + ry;
+        RECT rc{};
+        if (::GetClientRect(b.hwnd, &rc)) {
+            x = std::clamp<long>(x, rc.left, std::max<LONG>(rc.left, rc.right - 1));
+            y = std::clamp<long>(y, rc.top, std::max<LONG>(rc.top, rc.bottom - 1));
+        }
+        {
+            std::lock_guard<std::mutex> lock(p->state_mutex);
+            p->virtual_mouse_x = x;
+            p->virtual_mouse_y = y;
+        }
+        return SendBoundMouseMessageCompat(p, WM_MOUSEMOVE, 0);
+    }
+    return SendMouseCompat(MOUSEEVENTF_MOVE, rx, ry);
+}
+
+long SendMouseButtonForObjectCompat(
+    DmImpl *p, UINT message, DWORD send_input_flag,
+    WPARAM message_state = 0) {
+    if (!p) return 0;
+    const auto b = BindingSnapshotForObjectCompat(p);
+    if (BoundInputEnabledCompat(b) &&
+        (_stricmp(b.mouse.c_str(), "windows") == 0 ||
+         _stricmp(b.mouse.c_str(), "windows3") == 0))
+        return SendBoundMouseMessageCompat(p, message, message_state);
+    return SendMouseCompat(send_input_flag);
+}
+
+long SendMouseWheelForObjectCompat(DmImpl *p, long delta) {
+    if (!p) return 0;
+    const auto b = BindingSnapshotForObjectCompat(p);
+    if (BoundInputEnabledCompat(b) &&
+        (_stricmp(b.mouse.c_str(), "windows") == 0 ||
+         _stricmp(b.mouse.c_str(), "windows3") == 0)) {
+        return SendBoundMouseMessageCompat(
+            p, WM_MOUSEWHEEL,
+            MAKEWPARAM(0, static_cast<short>(delta)));
+    }
+    return SendMouseCompat(
+        MOUSEEVENTF_WHEEL, 0, 0,
+        static_cast<DWORD>(static_cast<LONG>(delta)));
+}
+
+HWND ResolveBoundKeyboardTargetCompat(DmImpl *p) {
+    if (!p) return nullptr;
+    const auto b = BindingSnapshotForObjectCompat(p);
+    if (!BoundInputEnabledCompat(b) ||
+        _stricmp(b.keypad.c_str(), "windows") != 0)
+        return nullptr;
+
+    const DWORD tid =
+        ::GetWindowThreadProcessId(b.hwnd, nullptr);
+    GUITHREADINFO info{};
+    info.cbSize = sizeof(info);
+    if (tid && ::GetGUIThreadInfo(tid, &info) &&
+        info.hwndFocus &&
+        (info.hwndFocus == b.hwnd ||
+         ::IsChild(b.hwnd, info.hwndFocus)))
+        return info.hwndFocus;
+    return b.hwnd;
+}
+
+long SendKeyboardVkForObjectCompat(
+    DmImpl *p, long vk, bool key_up) {
+    if (!p || vk < 0 || vk > 0xFF) return 0;
+    HWND target = ResolveBoundKeyboardTargetCompat(p);
+    if (!target) return SendKeyboardVkCompat(vk, key_up);
+
+    const UINT scan =
+        ::MapVirtualKeyA(
+            static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+    LPARAM lp = 1 |
+        (static_cast<LPARAM>(scan & 0xff) << 16);
+    if (IsExtendedVkCompat(vk))
+        lp |= (1L << 24);
+    if (key_up)
+        lp |= (1L << 30) | (1L << 31);
+
+    return ::PostMessageA(
+        target,
+        key_up ? WM_KEYUP : WM_KEYDOWN,
+        static_cast<WPARAM>(vk), lp) ? 1 : 0;
+}
+
+bool PressModifierStateForObjectCompat(
+    DmImpl *p, BYTE state, bool down) {
+    const long modifiers[] = {
+        VK_SHIFT, VK_CONTROL, VK_MENU
+    };
+    for (int i = down ? 0 : 2;
+         down ? i < 3 : i >= 0;
+         down ? ++i : --i) {
+        if (state & (1u << i)) {
+            if (!SendKeyboardVkForObjectCompat(
+                    p, modifiers[i], !down))
+                return false;
+        }
+    }
+    return true;
+}
+
 struct WordResultCompat {
     std::vector<std::string> xs;
     std::vector<std::string> ys;
@@ -1391,11 +1607,12 @@ long KeyPressCharacterCompat(DmImpl *p, unsigned char ch) {
 
     const long vk = LOBYTE(mapped);
     const BYTE state = HIBYTE(mapped);
-    if (!PressModifierStateCompat(state, true)) return 0;
-    const long ret = SendKeyboardVkCompat(vk, false);
-    if (ret) ::Sleep(static_cast<DWORD>(std::max<long>(0, p->keypad_delay_normal)));
-    const long up = ret ? SendKeyboardVkCompat(vk, true) : 0;
-    PressModifierStateCompat(state, false);
+    if (!PressModifierStateForObjectCompat(p, state, true)) return 0;
+    const long ret = SendKeyboardVkForObjectCompat(p, vk, false);
+    if (ret) ::Sleep(static_cast<DWORD>(std::max<long>(0, (_stricmp(BindingSnapshotForObjectCompat(p).keypad.c_str(), "windows") == 0
+         ? p->keypad_delay_windows : p->keypad_delay_normal))));
+    const long up = ret ? SendKeyboardVkForObjectCompat(p, vk, true) : 0;
+    PressModifierStateForObjectCompat(p, state, false);
     return ret && up ? 1 : 0;
 }
 
@@ -4332,9 +4549,31 @@ long dmsoft::ScreenToClient(long hwnd, long *x, long *y) {
 
 long dmsoft::GetCursorPos(long *x, long *y) {
     if (!x || !y) return 0;
+    auto *p = P(impl);
+    if (p) {
+        const auto b = BindingSnapshotForObjectCompat(p);
+        if (b.hwnd && ::IsWindow(b.hwnd)) {
+            if (BoundInputEnabledCompat(b) &&
+                (_stricmp(b.mouse.c_str(), "windows") == 0 ||
+                 _stricmp(b.mouse.c_str(), "windows3") == 0)) {
+                *x = b.mouse_x;
+                *y = b.mouse_y;
+                return 1;
+            }
+            POINT pt{};
+            if (!::GetCursorPos(&pt) ||
+                !::ScreenToClient(b.hwnd, &pt))
+                return 0;
+            *x = pt.x;
+            *y = pt.y;
+            return 1;
+        }
+    }
     POINT pt{};
     if (!::GetCursorPos(&pt)) return 0;
-    *x = pt.x; *y = pt.y; return 1;
+    *x = pt.x;
+    *y = pt.y;
+    return 1;
 }
 
 const char *dmsoft::GetWindowProcessPath(long hwnd) {
@@ -5278,50 +5517,71 @@ long dmsoft::SetMouseDelay(PCSTR type, long delay) {
 }
 
 long dmsoft::KeyDown(long vk) {
-    return SendKeyboardVkCompat(vk, false);
+    return SendKeyboardVkForObjectCompat(P(impl), vk, false);
 }
 
 long dmsoft::KeyUp(long vk) {
-    return SendKeyboardVkCompat(vk, true);
+    return SendKeyboardVkForObjectCompat(P(impl), vk, true);
 }
 
 long dmsoft::KeyPress(long vk) {
     auto *p = P(impl);
     if (!p) return 0;
-    if (!SendKeyboardVkCompat(vk, false)) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->keypad_delay_normal)));
-    return SendKeyboardVkCompat(vk, true);
+    if (!SendKeyboardVkForObjectCompat(p, vk, false)) return 0;
+    const auto b = BindingSnapshotForObjectCompat(p);
+    const long delay =
+        BoundInputEnabledCompat(b) &&
+        _stricmp(b.keypad.c_str(), "windows") == 0
+            ? p->keypad_delay_windows
+            : p->keypad_delay_normal;
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, delay)));
+    return SendKeyboardVkForObjectCompat(p, vk, true);
 }
 
 long dmsoft::LeftDown() {
-    return SendMouseCompat(MOUSEEVENTF_LEFTDOWN);
+    return SendMouseButtonForObjectCompat(
+        P(impl), WM_LBUTTONDOWN,
+        MOUSEEVENTF_LEFTDOWN, MK_LBUTTON);
 }
 
 long dmsoft::LeftUp() {
-    return SendMouseCompat(MOUSEEVENTF_LEFTUP);
+    return SendMouseButtonForObjectCompat(
+        P(impl), WM_LBUTTONUP,
+        MOUSEEVENTF_LEFTUP, 0);
 }
 
 long dmsoft::RightDown() {
-    return SendMouseCompat(MOUSEEVENTF_RIGHTDOWN);
+    return SendMouseButtonForObjectCompat(
+        P(impl), WM_RBUTTONDOWN,
+        MOUSEEVENTF_RIGHTDOWN, MK_RBUTTON);
 }
 
 long dmsoft::RightUp() {
-    return SendMouseCompat(MOUSEEVENTF_RIGHTUP);
+    return SendMouseButtonForObjectCompat(
+        P(impl), WM_RBUTTONUP,
+        MOUSEEVENTF_RIGHTUP, 0);
 }
 
 long dmsoft::MiddleDown() {
-    return SendMouseCompat(MOUSEEVENTF_MIDDLEDOWN);
+    return SendMouseButtonForObjectCompat(
+        P(impl), WM_MBUTTONDOWN,
+        MOUSEEVENTF_MIDDLEDOWN, MK_MBUTTON);
 }
 
 long dmsoft::MiddleUp() {
-    return SendMouseCompat(MOUSEEVENTF_MIDDLEUP);
+    return SendMouseButtonForObjectCompat(
+        P(impl), WM_MBUTTONUP,
+        MOUSEEVENTF_MIDDLEUP, 0);
 }
 
 long dmsoft::LeftClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!LeftDown()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
+          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
+           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
+              ? p->mouse_delay_windows : p->mouse_delay_normal))));
     return LeftUp();
 }
 
@@ -5329,7 +5589,10 @@ long dmsoft::RightClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!RightDown()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
+          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
+           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
+              ? p->mouse_delay_windows : p->mouse_delay_normal))));
     return RightUp();
 }
 
@@ -5337,7 +5600,10 @@ long dmsoft::MiddleClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!MiddleDown()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
+          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
+           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
+              ? p->mouse_delay_windows : p->mouse_delay_normal))));
     return MiddleUp();
 }
 
@@ -5345,26 +5611,27 @@ long dmsoft::LeftDoubleClick() {
     auto *p = P(impl);
     if (!p) return 0;
     if (!LeftClick()) return 0;
-    ::Sleep(static_cast<DWORD>(std::max<long>(0, p->mouse_delay_normal)));
+    ::Sleep(static_cast<DWORD>(std::max<long>(0, (BoundInputEnabledCompat(BindingSnapshotForObjectCompat(p)) &&
+          (_stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows") == 0 ||
+           _stricmp(BindingSnapshotForObjectCompat(p).mouse.c_str(), "windows3") == 0)
+              ? p->mouse_delay_windows : p->mouse_delay_normal))));
     return LeftClick();
 }
 
 long dmsoft::WheelDown() {
-    return SendMouseCompat(
-        MOUSEEVENTF_WHEEL, 0, 0,
-        static_cast<DWORD>(static_cast<LONG>(-WHEEL_DELTA)));
+    return SendMouseWheelForObjectCompat(P(impl), -WHEEL_DELTA);
 }
 
 long dmsoft::WheelUp() {
-    return SendMouseCompat(MOUSEEVENTF_WHEEL, 0, 0, WHEEL_DELTA);
+    return SendMouseWheelForObjectCompat(P(impl), WHEEL_DELTA);
 }
 
 long dmsoft::MoveTo(long x, long y) {
-    return MoveMouseAbsoluteCompat(x, y);
+    return MoveMouseForObjectCompat(P(impl), x, y);
 }
 
 long dmsoft::MoveR(long rx, long ry) {
-    return SendMouseCompat(MOUSEEVENTF_MOVE, rx, ry);
+    return MoveMouseRelativeForObjectCompat(P(impl), rx, ry);
 }
 
 const char *dmsoft::MoveToEx(long x, long y, long w, long h) {
