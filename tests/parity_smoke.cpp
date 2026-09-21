@@ -2373,6 +2373,123 @@ void test_cpu_cursor_display_state(LegacyRvaClient &old_dm, dmsoft &new_dm) {
     ::UnregisterClassA(cls, wc.hInstance);
 }
 
+
+void test_dictionary_core(LegacyRvaClient &old_dm, dmsoft &new_dm) {
+    const auto root = make_root();
+    const auto input = root / "dict_input.txt";
+    const auto old_saved = root / "dict_old_saved.txt";
+    const auto new_saved = root / "dict_new_saved.txt";
+
+    const std::string e1 =
+        "081101BF8020089FD10A21443F85038$记$0.0.33$11";
+    const std::string e2 =
+        "FFF00A7D49292524A7D402805FFC$回$0.0.29$11";
+    const std::string e3 =
+        "3F0020087FF08270B9A108268708808$收$0.0.31$11";
+
+    {
+        std::ofstream out(input, std::ios::binary | std::ios::trunc);
+        out << e1 << "\r\n" << e2;
+    }
+
+    eq_num(
+        "SetDict",
+        old_dm.SetDict(8, input.string().c_str()),
+        new_dm.SetDict(8, input.string().c_str()));
+
+    eq_num(
+        "GetDictCount-after-set",
+        old_dm.GetDictCount(8),
+        new_dm.GetDictCount(8));
+
+    for (long i : {-1L, 0L, 1L, 2L}) {
+        const char *a = old_dm.GetDict(8, i);
+        const std::string oa = a ? a : "<null>";
+        const char *b = new_dm.GetDict(8, i);
+        const std::string nb = b ? b : "<null>";
+        eq_str(
+            ("GetDict-" + std::to_string(i)).c_str(),
+            oa, nb);
+    }
+
+    eq_num(
+        "AddDict-valid",
+        old_dm.AddDict(8, e3.c_str()),
+        new_dm.AddDict(8, e3.c_str()));
+    eq_num(
+        "GetDictCount-after-add",
+        old_dm.GetDictCount(8),
+        new_dm.GetDictCount(8));
+
+    eq_num(
+        "AddDict-invalid",
+        old_dm.AddDict(8, "not-a-dictionary-entry"),
+        new_dm.AddDict(8, "not-a-dictionary-entry"));
+
+    eq_num(
+        "SaveDict",
+        old_dm.SaveDict(8, old_saved.string().c_str()),
+        new_dm.SaveDict(8, new_saved.string().c_str()));
+
+    {
+        std::ifstream oa(old_saved, std::ios::binary);
+        std::ifstream nb(new_saved, std::ios::binary);
+        const std::string old_bytes(
+            std::istreambuf_iterator<char>(oa),
+            std::istreambuf_iterator<char>());
+        const std::string new_bytes(
+            std::istreambuf_iterator<char>(nb),
+            std::istreambuf_iterator<char>());
+        eq_str("SaveDict-bytes", old_bytes, new_bytes);
+    }
+
+    eq_num(
+        "ClearDict",
+        old_dm.ClearDict(8),
+        new_dm.ClearDict(8));
+    eq_num(
+        "GetDictCount-after-clear",
+        old_dm.GetDictCount(8),
+        new_dm.GetDictCount(8));
+
+    std::string mem_dict = e2 + "\r\n" + e1;
+    eq_num(
+        "SetDictMem",
+        old_dm.SetDictMem(
+            8,
+            static_cast<long>(
+                reinterpret_cast<INT_PTR>(mem_dict.data())),
+            static_cast<long>(mem_dict.size())),
+        new_dm.SetDictMem(
+            8,
+            static_cast<long>(
+                reinterpret_cast<INT_PTR>(mem_dict.data())),
+            static_cast<long>(mem_dict.size())));
+
+    eq_num(
+        "GetDictCount-after-mem",
+        old_dm.GetDictCount(8),
+        new_dm.GetDictCount(8));
+
+    for (long i = 0; i < 2; ++i) {
+        const char *a = old_dm.GetDict(8, i);
+        const std::string oa = a ? a : "<null>";
+        const char *b = new_dm.GetDict(8, i);
+        const std::string nb = b ? b : "<null>";
+        eq_str(
+            ("GetDict-after-mem-" + std::to_string(i)).c_str(),
+            oa, nb);
+    }
+
+    old_dm.ClearDict(8);
+    new_dm.ClearDict(8);
+
+    std::error_code ec;
+    std::filesystem::remove(old_saved, ec);
+    std::filesystem::remove(new_saved, ec);
+    std::filesystem::remove(input, ec);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2401,6 +2518,7 @@ int main(int argc, char **argv) {
         test_screen_buffers(old_dm, new_dm);
         test_encoded_capture(old_dm, new_dm);
         test_ocr_state(old_dm, new_dm);
+        test_dictionary_core(old_dm, new_dm);
         test_critical_and_password(legacy_path, old_dm, new_dm);
         test_word_result_and_input(old_dm, new_dm);
         test_system(old_dm, new_dm);
